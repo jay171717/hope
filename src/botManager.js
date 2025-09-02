@@ -1,5 +1,6 @@
 import mineflayer from "mineflayer";
-import { pathfinder, goals } from "mineflayer-pathfinder";
+import pathfinderPkg from "mineflayer-pathfinder";
+const { pathfinder, goals } = pathfinderPkg;
 import mcdataFactory from "minecraft-data";
 import { Vec3 } from "vec3";
 import { ActionController } from "./actions.js";
