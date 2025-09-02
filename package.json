@@ -13,7 +13,7 @@
     "express": "^4.19.2",
     "mineflayer": "^4.20.1",
     "minecraft-data": "^3.88.0",
-    "minecraft-server-util": "^5.5.1",
+    "minecraft-server-util": "^5.4.4",
     "socket.io": "^4.7.5",
     "vec3": "^0.1.10"
   }
