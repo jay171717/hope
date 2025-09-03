@@ -2,9 +2,9 @@ import express from "express";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import dotenv from "dotenv";
+import crypto from "crypto";
 import { BotManager } from "./botManager.js";
 import { ServerStatusPoller } from "./statusPoller.js";
-import crypto from "crypto";
 
 dotenv.config();
 
@@ -26,16 +26,16 @@ const poller = new ServerStatusPoller(io, SERVER_HOST, SERVER_PORT);
 poller.start();
 
 function genId(name) {
-  return `${name.replace(/\W+/g,"_")}_${crypto.randomBytes(3).toString("hex")}`;
+  return `${(name||"bot").replace(/\W+/g,"_")}_${crypto.randomBytes(3).toString("hex")}`;
 }
 
 io.on("connection", socket => {
   socket.emit("bot:list", manager.list());
 
-  socket.on("bot:add", ({ id, name }) => {
+  socket.on("bot:add", ({ name }) => {
     try {
-      const useId = id || genId(name || "bot");
-      const info = manager.addBot({ id: useId, name });
+      const id = genId(name || "bot");
+      const info = manager.addBot({ id, name });
       socket.emit("bot:added", info);
       manager.broadcastList();
     } catch (err) { socket.emit("error:toast", err.message || String(err)); }
