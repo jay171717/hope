@@ -1,21 +1,14 @@
-import { Vec3 } from "vec3";
-
 /**
- * Actions (no Continuous): mine, attack, place, eat, drop
- * Modes: Once, Interval, Stop
- *
- * - Attack uses entityAtCursor (what bot is looking at)
- * - Place uses placeBlock if available and restores look
- * - Eat uses bot.consume() if available
- * - Drop tries to re-equip same item if possible after dropping
+ * Centralized action scheduler for "Once / Interval / Stop".
+ * Maintains per-bot active actions, intervals, and control states.
  */
-const DEFAULT_INTERVAL_TICKS = 10;
+const DEFAULT_INTERVAL_TICKS = 10; // 10 gt ~ 0.5s (20 gt/s)
 const TICKS_PER_SECOND = 20;
 
 export class ActionController {
   constructor(bot) {
     this.bot = bot;
-    this.active = new Map();
+    this.active = new Map(); // key -> {mode, intervalGt, timer}
     this.listeners = new Set();
   }
 
@@ -23,18 +16,22 @@ export class ActionController {
   emit() { for (const fn of this.listeners) fn(this.listActive()); }
 
   listActive() {
-    const arr = [];
-    for (const [k, s] of this.active) {
-      if (s.mode === "Stop") continue;
-      arr.push({ action: k, mode: s.mode, intervalGt: s.intervalGt || null });
+    const list = [];
+    for (const [key, state] of this.active) {
+      if (state.mode === "Stop") continue;
+      list.push({ action: key, mode: state.mode, intervalGt: state.intervalGt || null });
     }
-    return arr;
+    return list;
   }
 
   stopAll() {
-    for (const k of [...this.active.keys()]) this.setMode(k, "Stop");
+    for (const key of [...this.active.keys()]) this.setMode(key, "Stop");
   }
 
+  /**
+   * key: "mine"|"attack"|"place"|"eat"|"jump"|"drop"
+   * mode: "Once"|"Interval"|"Stop"
+   */
   setMode(key, mode, opts = {}) {
     const prev = this.active.get(key);
     if (prev?.timer) clearInterval(prev.timer);
@@ -48,90 +45,55 @@ export class ActionController {
     const state = { mode, intervalGt: opts.intervalGt || DEFAULT_INTERVAL_TICKS, dropStack: !!opts.dropStack };
     this.active.set(key, state);
 
-    if (mode === "Once") this._performOnce(key, state);
-    else if (mode === "Interval") {
+    if (mode === "Once") {
+      this._performOnce(key, state);
+    } else if (mode === "Interval") {
       const ms = (state.intervalGt / TICKS_PER_SECOND) * 1000;
       state.timer = setInterval(() => this._performOnce(key, state), ms);
     }
-
     this.emit();
   }
 
-  _saveLook() {
+  _performOnce(key, state) {
     const b = this.bot;
-    if (!b || !b.entity) return null;
-    return { yaw: b.entity.yaw, pitch: b.entity.pitch };
-  }
-  _restoreLook(l) {
-    if (!l) return;
-    try { this.bot.look(l.yaw, l.pitch, false).catch(()=>{}); } catch {}
-  }
-
-  async _performOnce(key, state) {
-    const b = this.bot;
-    if (!b) return;
-    const prev = this._saveLook();
     try {
       switch (key) {
         case "mine": {
-          const blk = (() => { try { return b.blockAtCursor(6); } catch { return null; } })();
-          if (blk) await b.dig(blk).catch(()=>{});
+          const block = b.blockAtCursor(5);
+          if (block) b.dig(block).catch(() => {});
           break;
         }
         case "attack": {
-          let target = null;
-          try { target = b.entityAtCursor ? b.entityAtCursor(6) : null; } catch {}
-          if (!target) {
-            try { const ne = b.nearestEntity ? b.nearestEntity() : null; if (ne) target = ne; } catch {}
-          }
-          if (target) await b.attack(target).catch(()=>{});
+          const ent = b.entityAtCursor(4);
+          if (ent) b.attack(ent);
           break;
         }
         case "place": {
-          const blk = (() => { try { return b.blockAtCursor(6); } catch { return null; } })();
-          if (blk && b.heldItem) {
-            try {
-              if (typeof b.placeBlock === "function") {
-                await b.placeBlock(blk, new Vec3(0, 1, 0)).catch(()=>{});
-              } else {
-                b.activateItem(false);
-                setTimeout(()=>{ try { b.deactivateItem(); } catch {} }, 150);
-              }
-            } catch {}
+          const block = b.blockAtCursor(5);
+          if (block && b.heldItem) {
+            b.placeBlock(block, { x: 0, y: 1, z: 0 }).catch(() => {});
           }
           break;
         }
         case "eat": {
-          if (b.heldItem) {
-            if (typeof b.consume === "function") {
-              await b.consume().catch(()=>{});
-            } else {
-              b.activateItem(false);
-              await new Promise(r => setTimeout(r, 1500));
-              try { b.deactivateItem(); } catch {}
-            }
+          if (b.heldItem && b.heldItem.name.includes("food")) {
+            b.consume().catch(() => {});
           }
+          break;
+        }
+        case "jump": {
+          b.setControlState('jump', true);
+          setTimeout(() => b.setControlState('jump', false), 200);
           break;
         }
         case "drop": {
           if (b.heldItem) {
-            const prevName = b.heldItem?.name;
-            try {
-              if (state.dropStack && typeof b.tossStack === "function") await b.tossStack(b.heldItem).catch(()=>{});
-              else await b.toss(b.heldItem.type, null, 1).catch(()=>{});
-            } catch {}
-            // try to re-equip same type if available to preserve mainhand
-            try {
-              const found = b.inventory.items().find(it => it.name === prevName);
-              if (found) await b.equip(found, "hand").catch(()=>{});
-            } catch {}
+            if (state.dropStack) b.tossStack(b.heldItem).catch(() => {});
+            else b.toss(b.heldItem.type, null, 1).catch(() => {});
           }
           break;
         }
       }
-    } catch {}
-    finally {
-      this._restoreLook(prev);
-    }
+    } catch { /* no-op */ }
   }
 }
