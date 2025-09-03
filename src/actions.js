@@ -1,7 +1,14 @@
 /**
  * Centralized action scheduler for "Once / Interval / Continuous / Stop".
  * Maintains per-bot active actions, intervals, and control states.
+ *
+ * Improvements:
+ * - Once/Interval/Continuous implemented with safer calls.
+ * - Continuous leftClick uses repeated attack or dig only if autoMinePlace allowed (the botManager will gate digging).
+ * - RightClick continuous uses activateItem(true)/deactivateItem().
+ * - Drop supports dropStack option.
  */
+
 const DEFAULT_INTERVAL_TICKS = 10; // 10 gt ~ 0.5s (20 gt/s)
 const TICKS_PER_SECOND = 20;
 
@@ -10,10 +17,11 @@ export class ActionController {
     this.bot = bot;
     this.active = new Map(); // key -> {mode, intervalGt, timer, continuous}
     this.listeners = new Set();
+    this._continuousIntervals = {};
   }
 
   onUpdate(fn) { this.listeners.add(fn); }
-  emit() { for (const fn of this.listeners) fn(this.listActive()); }
+  emit() { for (const fn of this.listeners) try { fn(this.listActive()); } catch{} }
 
   listActive() {
     const list = [];
@@ -35,7 +43,6 @@ export class ActionController {
    */
   setMode(key, mode, opts = {}) {
     const prev = this.active.get(key);
-    // clear timers / continuous states
     if (prev?.timer) { clearInterval(prev.timer); }
     if (prev?.continuous) this._endContinuous(key);
 
@@ -64,42 +71,50 @@ export class ActionController {
     const b = this.bot;
     try {
       switch (key) {
-        case "leftClick":
-          b.attack(b.nearestEntity()?.entity || undefined); // if entity is close it will attack
-          // Also simulate a block dig tick: one click only
+        case "leftClick": {
+          // attack nearest entity if present, otherwise swing arm (no hold)
+          const ent = b.nearestEntity();
+          if (ent && ent.entity) b.attack(ent.entity);
+          else b.swingArm();
           break;
+        }
         case "rightClick":
-          b.activateItem(false); // briefly uses item (eat/place/use) – once
-          setTimeout(() => b.deactivateItem(), 150);
+          b.activateItem(false);
+          setTimeout(() => { try { b.deactivateItem(); } catch{} }, 150);
           break;
         case "jump":
           b.setControlState('jump', true);
-          setTimeout(() => b.setControlState('jump', false), 200);
+          setTimeout(() => { try { b.setControlState('jump', false); } catch{} }, 200);
           break;
         case "sneak":
           b.setControlState('sneak', true);
-          setTimeout(() => b.setControlState('sneak', false), 400);
+          setTimeout(() => { try { b.setControlState('sneak', false); } catch{} }, 400);
           break;
         case "drop":
-          // Drop one item in hand (or stack if toggle)
           if (b.heldItem) {
-            if (state.dropStack) b.tossStack(b.heldItem).catch(() => {});
-            else b.toss(b.heldItem.type, null, 1).catch(() => {});
+            if (state.dropStack) b.tossStack(b.heldItem).catch(()=>{});
+            else b.toss(b.heldItem.type, null, 1).catch(()=>{});
           }
           break;
       }
-    } catch { /* no-op */ }
+    } catch (err) { /* ignore runtime action errors */ }
   }
 
   _startContinuous(key, state) {
     const b = this.bot;
     switch (key) {
       case "leftClick":
-        // Continuous mine (hold dig)
-        b.swingArm("right", true);
+        // Emulate hold: repeated attack if entity present, otherwise swingArm frequently.
+        this._continuousIntervals[key] = setInterval(() => {
+          try {
+            const ent = b.nearestEntity();
+            if (ent && ent.entity) b.attack(ent.entity);
+            else b.swingArm();
+          } catch {}
+        }, 150);
         break;
       case "rightClick":
-        b.activateItem(true); // hold use/eat/place/interact
+        try { b.activateItem(true); } catch {}
         break;
       case "jump":
         b.setControlState('jump', true);
@@ -108,28 +123,19 @@ export class ActionController {
         b.setControlState('sneak', true);
         break;
       case "drop":
-        // Not meaningful as hold; ignore and treat as interval fast drop?
+        // Continuous drop -> drop items repeatedly
+        this._continuousIntervals[key] = setInterval(() => {
+          try { if (b.heldItem) b.toss(b.heldItem.type, null, 1).catch(()=>{}); } catch {}
+        }, 300);
         break;
     }
   }
 
   _endContinuous(key) {
     const b = this.bot;
-    switch (key) {
-      case "leftClick":
-        b.swingArm("right", false);
-        break;
-      case "rightClick":
-        b.deactivateItem();
-        break;
-      case "jump":
-        b.setControlState('jump', false);
-        break;
-      case "sneak":
-        b.setControlState('sneak', false);
-        break;
-      case "drop":
-        break;
-    }
+    if (this._continuousIntervals[key]) { clearInterval(this._continuousIntervals[key]); delete this._continuousIntervals[key]; }
+    if (key === "rightClick") { try { b.deactivateItem(); } catch{} }
+    if (key === "jump") { try { b.setControlState('jump', false); } catch{} }
+    if (key === "sneak") { try { b.setControlState('sneak', false); } catch{} }
   }
 }
