@@ -48,9 +48,10 @@ io.on("connection", socket => {
   socket.on("bot:chat", ({ id, text }) => manager.chat(id, text));
   socket.on("bot:respawn", id => manager.respawn(id));
 
-  socket.on("bot:swapHands", id => manager.swapHands(id));
-  socket.on("bot:holdSlot", ({ id, index }) => manager.holdInventorySlot(id, index));
-  socket.on("bot:unequipArmor", ({ id, part }) => manager.unequipArmor(id, part));
+  socket.on("bot:equipSlot", ({ id, index, hand }) => manager.equipSlot(id, index, hand));
+  socket.on("bot:holdSlot", ({ id, index }) => manager.equipSlot(id, index, "main")); // compatibility
+
+  socket.on("bot:unequipArmor", ({ id, part }) => manager.unequipArmor?.(id, part));
 
   socket.on("bot:moveContinuous", ({ id, dir, on }) => manager.setContinuousMove(id, dir, on));
   socket.on("bot:jumpOnce", id => manager.jumpOnce(id));
