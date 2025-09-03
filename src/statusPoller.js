@@ -25,8 +25,7 @@ export class ServerStatusPoller {
       const res = await status(this.host, this.port, { timeout: 2000 });
       if (!this._onlineSince) this._onlineSince = Date.now();
       const players = (res.players?.sample || []).map(p => ({
-        name: p.name,
-        headUrl: `https://minotar.net/helm/${encodeURIComponent(p.name)}/32`,
+        name: p.name, headUrl: `https://minotar.net/helm/${encodeURIComponent(p.name)}/32`
       }));
       this.io.emit("server:status", {
         online: true,
@@ -36,7 +35,7 @@ export class ServerStatusPoller {
         favicon: res.favicon || null,
         uptime: formatDuration(Date.now() - this._onlineSince),
         host: this.host,
-        port: this.port,
+        port: this.port
       });
     } catch {
       this._onlineSince = null;
@@ -48,7 +47,7 @@ export class ServerStatusPoller {
         favicon: null,
         uptime: "—",
         host: this.host,
-        port: this.port,
+        port: this.port
       });
     }
   }
