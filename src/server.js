@@ -55,7 +55,6 @@ io.on("connection", socket => {
   socket.on("bot:moveContinuous", ({ id, dir, on }) => manager.setContinuousMove(id, dir, on));
   socket.on("bot:jumpOnce", id => manager.jumpOnce(id));
   socket.on("bot:toggleSneak", id => manager.toggleSneak(id));
-  socket.on("bot:moveBlocks", ({ id, dir, blocks }) => manager.moveBlocks(id, dir, blocks));
   socket.on("bot:stopPath", id => manager.stopPath(id));
   socket.on("bot:gotoXYZ", ({ id, x, y, z }) => manager.gotoXYZ(id, x, y, z));
 
