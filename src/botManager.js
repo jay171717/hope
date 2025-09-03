@@ -16,7 +16,9 @@ export class BotManager {
   }
 
   list() {
-    return [...this.bots.entries()].map(([id, b]) => this._publicBotInfo(id, b));
+    return [...this.bots.entries()].map(([id, b]) =>
+      this._publicBotInfo(id, b)
+    );
   }
 
   _publicBotInfo(id, data) {
@@ -28,7 +30,7 @@ export class BotManager {
       description: data?.description || "",
       headUrl: `${this.headBase}/${encodeURIComponent(data.name)}/32`,
       lastSeen: data?.lastSeen || null,
-      createdAt: data?.createdAt || null
+      createdAt: data?.createdAt || null,
     };
   }
 
@@ -39,20 +41,24 @@ export class BotManager {
   addBot({ id, name }) {
     if (this.bots.has(id)) throw new Error("Bot id already exists");
     const entry = {
-      id, name, bot: null, mcData: null,
+      id,
+      name,
+      auth: "offline",
+      bot: null,
+      mcData: null,
       actions: null,
       toggledConnected: true,
       description: "",
-      tweaks: {
-        autoRespawn: false,
+      createdAt: Date.now(),
+      lastSeen: null,
+      toggles: {
         autoReconnect: false,
+        autoRespawn: false,
         autoSprint: false,
         autoEat: false,
         followPlayer: null,
-        autoMinePlace: false
+        autoMinePlace: false,
       },
-      createdAt: Date.now(),
-      lastSeen: null
     };
     this.bots.set(id, entry);
     this._spawn(entry);
@@ -61,13 +67,15 @@ export class BotManager {
   }
 
   setDescription(id, text) {
-    const e = this.bots.get(id); if (!e) return;
+    const e = this.bots.get(id);
+    if (!e) return;
     e.description = String(text || "").slice(0, 127);
     this.io.emit("bot:description", { id, description: e.description });
   }
 
   toggleConnection(id, shouldConnect) {
-    const e = this.bots.get(id); if (!e) return;
+    const e = this.bots.get(id);
+    if (!e) return;
     e.toggledConnected = !!shouldConnect;
     if (shouldConnect && !e.bot) this._spawn(e);
     if (!shouldConnect && e.bot) e.bot.end("User toggled disconnect");
@@ -75,7 +83,8 @@ export class BotManager {
   }
 
   removeBot(id) {
-    const e = this.bots.get(id); if (!e) return;
+    const e = this.bots.get(id);
+    if (!e) return;
     if (e.bot) e.bot.end("Deleted by user");
     this.bots.delete(id);
     this.broadcastList();
@@ -89,15 +98,16 @@ export class BotManager {
       port: this.serverPort,
       username: entry.name,
       auth: "offline",
-      version: this.fixedVersion || false
+      version: this.fixedVersion || false,
     });
 
     entry.bot = bot;
     entry.actions = new ActionController(bot);
-    entry.actions.onUpdate(list => this.io.emit("bot:activeActions", { id: entry.id, actions: list }));
+    entry.actions.onUpdate((list) =>
+      this.io.emit("bot:activeActions", { id: entry.id, actions: list })
+    );
 
     bot.loadPlugin(pathfinder);
-
     bot.once("spawn", () => {
       entry.lastSeen = Date.now();
       entry.mcData = mcdataFactory(bot.version);
@@ -110,15 +120,19 @@ export class BotManager {
       this.io.emit("bot:status", { id: entry.id, status: "offline" });
       entry.actions?.stopAll();
       entry.bot = null;
-      if (entry.tweaks.autoReconnect && entry.toggledConnected) {
+      if (entry.toggles.autoReconnect && entry.toggledConnected) {
         setTimeout(() => this._spawn(entry), 3000);
       }
       this.broadcastList();
     });
 
     bot.on("death", () => {
-      if (entry.tweaks.autoRespawn) {
-        setTimeout(() => { try { bot.respawn(); } catch {} }, 1000);
+      if (entry.toggles.autoRespawn) {
+        setTimeout(() => {
+          try {
+            bot.respawn();
+          } catch {}
+        }, 1000);
       }
     });
 
@@ -131,31 +145,6 @@ export class BotManager {
     bot.on("messagestr", (msg) => {
       this.io.emit("bot:chat", { id: entry.id, line: msg });
     });
-
-    // Auto-eat loop
-    entry._eatLoop = setInterval(async () => {
-      if (!entry.tweaks.autoEat || !entry.bot) return;
-      const b = entry.bot;
-      if (b.food <= 10 || b.health <= 10) {
-        const food = b.inventory.items().find(it => it.name.includes("bread") || it.name.includes("apple") || it.name.includes("steak") || it.name.includes("pork"));
-        if (food) {
-          try { await b.equip(food, "hand"); await b.consume(); } catch {}
-        }
-      }
-    }, 4000);
-
-    // Follow loop
-    entry._followLoop = setInterval(() => {
-      if (!entry.tweaks.followPlayer || !entry.bot) return;
-      const b = entry.bot;
-      const target = Object.values(b.players).find(p => p.username === entry.tweaks.followPlayer)?.entity;
-      if (target) {
-        const goal = new goals.GoalFollow(target, 2);
-        b.pathfinder.setGoal(goal, false);
-      } else {
-        b.pathfinder.setGoal(null);
-      }
-    }, 3000);
   }
 
   _wireTelemetry(entry) {
@@ -164,44 +153,29 @@ export class BotManager {
       if (!entry.bot) return;
       const b = entry.bot;
       const ent = b.entity;
-      const health = b.health ?? null;
-      const food = b.food ?? null;
-      const xp = b.experience?.level ?? null;
 
-      let lookingBlock = null, lookingEntity = null;
-      try { lookingBlock = b.blockAtCursor(5) || null; } catch {}
-      try { lookingEntity = b.entityAtCursor(5) || null; } catch {}
-
-      const dim = b.game?.dimension || "unknown";
-      const pos = ent?.position ? { x: ent.position.x, y: ent.position.y, z: ent.position.z } : null;
-      const yaw = ent?.yaw ?? 0;
-      const pitch = ent?.pitch ?? 0;
-
-      const inv = this._serializeInventory(b);
-      const effects = [...(b.effects ? b.effects.values() : [])].map(e => ({
-        type: e.type?.name || e.type || "effect",
-        amp: e.amplifier,
-        dur: e.duration
-      }));
+      const status = {
+        uptime: entry.lastSeen ? Date.now() - entry.lastSeen : null,
+        dim: b.game?.dimension || "unknown",
+        pos: ent?.position
+          ? { x: ent.position.x, y: ent.position.y, z: ent.position.z }
+          : null,
+        health: b.health ?? null,
+        hunger: b.food ?? null,
+        xp: b.experience?.level ?? null,
+        yaw: ent?.yaw ?? 0,
+        pitch: ent?.pitch ?? 0,
+        effects: [...(b.effects ? b.effects.values() : [])].map((e) => ({
+          type: e.type?.name || e.type || "effect",
+          amp: e.amplifier,
+          dur: e.duration,
+        })),
+      };
 
       this.io.emit("bot:telemetry", {
         id: entry.id,
-        status: {
-          uptime: entry.lastSeen ? Date.now() - entry.lastSeen : null,
-          dim,
-          pos,
-          health,
-          hunger: food,
-          xp,
-          yaw,
-          pitch,
-          effects,
-          looking: {
-            block: lookingBlock ? { name: lookingBlock.name, pos: lookingBlock.position } : null,
-            entity: lookingEntity?.name || null
-          }
-        },
-        inventory: inv
+        status,
+        inventory: this._serializeInventory(b),
       });
     };
     entry._telemetryTimer = setInterval(sendStatus, 1000);
@@ -214,18 +188,26 @@ export class BotManager {
       head: inv.slots[5] || null,
       chest: inv.slots[6] || null,
       legs: inv.slots[7] || null,
-      feet: inv.slots[8] || null
+      feet: inv.slots[8] || null,
     };
     const mainHand = b.heldItem || null;
     const offHand = inv.slots[45] || null;
 
-    const toItem = it => it ? ({
-      name: it.name, count: it.count,
-      enchants: (it.nbt?.value?.Enchantments?.value?.value || []).map(e => e.id?.value || e.id),
-      durability: it.durabilityUsed !== undefined && it.maxDurability !== undefined
-        ? (it.maxDurability - it.durabilityUsed)
-        : null
-    }) : null;
+    const toItem = (it) =>
+      it
+        ? {
+            name: it.name,
+            count: it.count,
+            enchants:
+              (it.nbt?.value?.Enchantments?.value?.value || []).map(
+                (e) => e.id?.value || e.id
+              ) || [],
+            durability:
+              it.durabilityUsed !== undefined && it.maxDurability !== undefined
+                ? it.maxDurability - it.durabilityUsed
+                : null,
+          }
+        : null;
 
     return {
       slots: slots.map(toItem),
@@ -233,34 +215,40 @@ export class BotManager {
         head: toItem(armorSlots.head),
         chest: toItem(armorSlots.chest),
         legs: toItem(armorSlots.legs),
-        feet: toItem(armorSlots.feet)
+        feet: toItem(armorSlots.feet),
       },
       mainHand: toItem(mainHand),
-      offHand: toItem(offHand)
+      offHand: toItem(offHand),
     };
   }
 
   // ---------- Commands from UI ----------
   chat(id, text) {
-    const e = this.bots.get(id); if (!e?.bot) return;
+    const e = this.bots.get(id);
+    if (!e?.bot) return;
     e.bot.chat(text);
   }
 
   respawn(id) {
-    const e = this.bots.get(id); if (!e?.bot) return;
-    try { e.bot.respawn(); } catch {}
+    const e = this.bots.get(id);
+    if (!e?.bot) return;
+    try {
+      e.bot.respawn();
+    } catch {}
   }
 
   holdInventorySlot(id, index, hand = "hand") {
-    const e = this.bots.get(id); if (!e?.bot) return;
+    const e = this.bots.get(id);
+    if (!e?.bot) return;
     const b = e.bot;
     const slot = b.inventory.slots[9 + index];
-    if (!slot) { if (hand === "hand") b.unequip("hand"); if (hand === "off-hand") b.unequip("off-hand"); return; }
+    if (!slot) return;
     b.equip(slot, hand).catch(() => {});
   }
 
   unequipArmor(id, part) {
-    const e = this.bots.get(id); if (!e?.bot) return;
+    const e = this.bots.get(id);
+    if (!e?.bot) return;
     const b = e.bot;
     if (b.inventory.emptySlotCount() <= 0) return;
     const mapping = { head: "head", chest: "torso", legs: "legs", feet: "feet" };
@@ -268,61 +256,57 @@ export class BotManager {
   }
 
   setContinuousMove(id, dir, on) {
-    const e = this.bots.get(id); if (!e?.bot) return;
+    const e = this.bots.get(id);
+    if (!e?.bot) return;
     const map = { W: "forward", A: "left", S: "back", D: "right" };
-    const key = map[dir]; if (!key) return;
+    const key = map[dir];
+    if (!key) return;
     e.bot.setControlState(key, !!on);
   }
 
   jumpOnce(id) {
-    const e = this.bots.get(id); if (!e?.bot) return;
-    const b = e.bot;
-    b.setControlState('jump', true);
-    setTimeout(() => b.setControlState('jump', false), 200);
+    const e = this.bots.get(id);
+    if (!e?.bot) return;
+    e.bot.setControlState("jump", true);
+    setTimeout(() => e.bot.setControlState("jump", false), 200);
   }
 
   toggleSneak(id) {
-    const e = this.bots.get(id); if (!e?.bot) return;
+    const e = this.bots.get(id);
+    if (!e?.bot) return;
     const b = e.bot;
-    const newState = !b.getControlState('sneak');
-    b.setControlState('sneak', newState);
+    const sneaking = b.getControlState("sneak");
+    b.setControlState("sneak", !sneaking);
   }
 
   gotoXYZ(id, x, y, z) {
-    const e = this.bots.get(id); if (!e?.bot) return;
+    const e = this.bots.get(id);
+    if (!e?.bot) return;
     const b = e.bot;
-    b.pathfinder.setGoal(new goals.GoalBlock(Math.round(x), Math.round(y), Math.round(z)));
+    b.pathfinder.setGoal(
+      new goals.GoalBlock(Math.round(x), Math.round(y), Math.round(z)),
+      true
+    );
   }
 
   rotateStep(id, dYawDeg = 0, dPitchDeg = 0) {
-    const e = this.bots.get(id); if (!e?.bot) return;
+    const e = this.bots.get(id);
+    if (!e?.bot) return;
     const b = e.bot;
-    const yaw = b.entity.yaw + (dYawDeg * Math.PI / 180);
-    const pitch = b.entity.pitch + (dPitchDeg * Math.PI / 180);
+    const yaw = b.entity.yaw + (dYawDeg * Math.PI) / 180;
+    const pitch = b.entity.pitch + (dPitchDeg * Math.PI) / 180;
     b.look(yaw, pitch, true).catch(() => {});
-  }
-
-  lookAtAngles(id, yawDeg, pitchDeg) {
-    const e = this.bots.get(id); if (!e?.bot) return;
-    const b = e.bot;
-    const yaw = yawDeg * Math.PI / 180;
-    const pitch = pitchDeg * Math.PI / 180;
-    b.look(yaw, pitch, true).catch(() => {});
-  }
-
-  lookAtCoord(id, x, y, z) {
-    const e = this.bots.get(id); if (!e?.bot) return;
-    const b = e.bot;
-    b.lookAt(new Vec3(x, y, z)).catch(() => {});
   }
 
   setActionMode(id, action, mode, options) {
-    const e = this.bots.get(id); if (!e?.bot) return;
+    const e = this.bots.get(id);
+    if (!e?.bot) return;
     e.actions.setMode(action, mode, options);
   }
 
   setTweaks(id, toggles) {
-    const e = this.bots.get(id); if (!e) return;
-    e.tweaks = { ...e.tweaks, ...toggles };
+    const e = this.bots.get(id);
+    if (!e?.bot) return;
+    e.toggles = { ...e.toggles, ...toggles };
   }
 }
