@@ -1,12 +1,13 @@
 import { Vec3 } from "vec3";
 
 /**
- * Actions: mine, attack, place, eat, drop
- * Modes: Once, Interval, Stop  (No Continuous)
+ * Actions (no Continuous): mine, attack, place, eat, drop
+ * Modes: Once, Interval, Stop
  *
- * - Attack uses entityAtCursor (what bot is actually looking at)
- * - Place tries placeBlock / falls back to activateItem, and restores look after
- * - Eat uses bot.consume() if available to finish eating
+ * - Attack uses entityAtCursor (what bot is looking at)
+ * - Place uses placeBlock if available and restores look
+ * - Eat uses bot.consume() if available
+ * - Drop tries to re-equip same item if possible after dropping
  */
 const DEFAULT_INTERVAL_TICKS = 10;
 const TICKS_PER_SECOND = 20;
@@ -66,19 +67,6 @@ export class ActionController {
     try { this.bot.look(l.yaw, l.pitch, false).catch(()=>{}); } catch {}
   }
 
-  _isEntityInSight(entity, maxDeg = 25) {
-    if (!entity || !this.bot.entity) return false;
-    try {
-      const botPos = this.bot.entity.position;
-      const dx = entity.position.x - botPos.x;
-      const dz = entity.position.z - botPos.z;
-      const yawTo = Math.atan2(dz, dx);
-      const yawDiff = Math.abs(((this.bot.entity.yaw - yawTo + Math.PI) % (2*Math.PI)) - Math.PI);
-      const yawDeg = Math.abs(yawDiff * 180 / Math.PI);
-      return yawDeg <= maxDeg;
-    } catch { return false; }
-  }
-
   async _performOnce(key, state) {
     const b = this.bot;
     if (!b) return;
@@ -91,15 +79,10 @@ export class ActionController {
           break;
         }
         case "attack": {
-          // prefer entityAtCursor (what bot is actually looking at)
           let target = null;
           try { target = b.entityAtCursor ? b.entityAtCursor(6) : null; } catch {}
           if (!target) {
-            // fallback: nearest entity but must be in sight
-            try {
-              const ne = b.nearestEntity ? b.nearestEntity() : null;
-              if (ne && this._isEntityInSight(ne)) target = ne;
-            } catch {}
+            try { const ne = b.nearestEntity ? b.nearestEntity() : null; if (ne) target = ne; } catch {}
           }
           if (target) await b.attack(target).catch(()=>{});
           break;
@@ -108,11 +91,9 @@ export class ActionController {
           const blk = (() => { try { return b.blockAtCursor(6); } catch { return null; } })();
           if (blk && b.heldItem) {
             try {
-              // prefer placeBlock if available
               if (typeof b.placeBlock === "function") {
                 await b.placeBlock(blk, new Vec3(0, 1, 0)).catch(()=>{});
               } else {
-                // fallback: activateItem briefly
                 b.activateItem(false);
                 setTimeout(()=>{ try { b.deactivateItem(); } catch {} }, 150);
               }
@@ -134,8 +115,16 @@ export class ActionController {
         }
         case "drop": {
           if (b.heldItem) {
-            if (state.dropStack && typeof b.tossStack === "function") await b.tossStack(b.heldItem).catch(()=>{});
-            else await b.toss(b.heldItem.type, null, 1).catch(()=>{});
+            const prevName = b.heldItem?.name;
+            try {
+              if (state.dropStack && typeof b.tossStack === "function") await b.tossStack(b.heldItem).catch(()=>{});
+              else await b.toss(b.heldItem.type, null, 1).catch(()=>{});
+            } catch {}
+            // try to re-equip same type if available to preserve mainhand
+            try {
+              const found = b.inventory.items().find(it => it.name === prevName);
+              if (found) await b.equip(found, "hand").catch(()=>{});
+            } catch {}
           }
           break;
         }
