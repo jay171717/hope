@@ -41,7 +41,6 @@
     </section>
 
     <section id="botPanel" class="grid2" style="display:none">
-      <!-- STATUS (same fields) -->
       <div class="card" id="statusPanel">
         <div class="panel-header">
           <h2>Status</h2>
@@ -72,7 +71,6 @@
         </div>
       </div>
 
-      <!-- INVENTORY -->
       <div class="card" id="inventoryPanel">
         <h2>Inventory</h2>
         <div class="inv">
@@ -99,7 +97,6 @@
         </div>
       </div>
 
-      <!-- MOVEMENT (no X blocks) -->
       <div class="card" id="movementPanel">
         <h2>Movement / Looking</h2>
         <div class="mv-grid">
@@ -163,37 +160,40 @@
         </div>
       </div>
 
-      <!-- ACTIONS -->
       <div class="card" id="actionsPanel">
         <h2>Actions</h2>
         <div class="actions">
           <div class="action" data-action="mine">
             <h4>Mine</h4>
-            <select class="mode"><option>Once</option><option>Interval</option><option>Continuous</option><option>Stop</option></select>
+            <select class="mode"><option>Once</option><option>Interval</option><option>Stop</option></select>
             <label>Interval (gt): <input class="gt" type="number" value="10"/></label>
             <button class="apply">Apply</button>
           </div>
+
           <div class="action" data-action="attack">
             <h4>Attack</h4>
-            <select class="mode"><option>Once</option><option>Interval</option><option>Continuous</option><option>Stop</option></select>
+            <select class="mode"><option>Once</option><option>Interval</option><option>Stop</option></select>
             <label>Interval (gt): <input class="gt" type="number" value="10"/></label>
             <button class="apply">Apply</button>
           </div>
+
           <div class="action" data-action="place">
             <h4>Place</h4>
-            <select class="mode"><option>Once</option><option>Interval</option><option>Continuous</option><option>Stop</option></select>
+            <select class="mode"><option>Once</option><option>Interval</option><option>Stop</option></select>
             <label>Interval (gt): <input class="gt" type="number" value="10"/></label>
             <button class="apply">Apply</button>
           </div>
+
           <div class="action" data-action="eat">
             <h4>Eat</h4>
-            <select class="mode"><option>Once</option><option>Interval</option><option>Continuous</option><option>Stop</option></select>
+            <select class="mode"><option>Once</option><option>Interval</option><option>Stop</option></select>
             <label>Interval (gt): <input class="gt" type="number" value="20"/></label>
             <button class="apply">Apply</button>
           </div>
+
           <div class="action" data-action="drop">
             <h4>Drop</h4>
-            <select class="mode"><option>Once</option><option>Interval</option><option>Continuous</option><option>Stop</option></select>
+            <select class="mode"><option>Once</option><option>Interval</option><option>Stop</option></select>
             <label>Interval (gt): <input class="gt" type="number" value="5"/></label>
             <label><input class="dropStack" type="checkbox"/> Drop Stack</label>
             <button class="apply">Apply</button>
@@ -201,7 +201,6 @@
         </div>
       </div>
 
-      <!-- MISC - ALL OFF by default -->
       <div class="card" id="miscPanel">
         <h2>Misc Tweaks</h2>
         <div class="toggles">
@@ -209,8 +208,8 @@
           <label><input type="checkbox" id="twAutoRespawn" /> Auto-Respawn</label>
           <label><input type="checkbox" id="twAutoSprint" /> Auto-Sprint</label>
           <label><input type="checkbox" id="twAutoEat" /> Auto-Eat (hunger≤10 or health≤10)</label>
-          <label><input type="checkbox" id="twAutoMinePlace" /> Auto Mine/Place (off by default)</label>
-          <label><input type="checkbox" id="twAutoSleep" /> Auto-Sleep (Overworld)</label>
+          <label><input type="checkbox" id="twAutoMinePlace" /> Auto Mine/Place</label>
+          <label><input type="checkbox" id="twAutoSleep" /> Auto-Sleep (Overworld, bed ≤ 2 blocks)</label>
           <label><input type="checkbox" id="twFollowToggle" /> Follow Player</label>
           <label>Follow Player Name: <input type="text" id="twFollowPlayer" placeholder="player name" disabled/></label>
         </div>
