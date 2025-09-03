@@ -1,7 +1,17 @@
 import { Vec3 } from "vec3";
 
+/**
+ * Actions: mine, attack, place, eat, drop
+ * Modes: Once, Interval, Continuous, Stop
+ *
+ * - Attack only if the entity is roughly in the bot's look direction (angle check)
+ * - Place uses blockAtCursor and placeBlock() where possible, without changing look
+ * - Eat uses bot.consume() when available
+ */
 const DEFAULT_INTERVAL_TICKS = 10;
 const TICKS_PER_SECOND = 20;
+
+function degToRad(d) { return d * Math.PI / 180; }
 
 export class ActionController {
   constructor(bot) {
@@ -14,12 +24,12 @@ export class ActionController {
   emit() { for (const fn of this.listeners) fn(this.listActive()); }
 
   listActive() {
-    const list = [];
+    const arr = [];
     for (const [k, s] of this.active) {
       if (s.mode === "Stop") continue;
-      list.push({ action: k, mode: s.mode, intervalGt: s.intervalGt || null });
+      arr.push({ action: k, mode: s.mode, intervalGt: s.intervalGt || null });
     }
-    return list;
+    return arr;
   }
 
   stopAll() {
@@ -29,7 +39,7 @@ export class ActionController {
   setMode(key, mode, opts = {}) {
     const prev = this.active.get(key);
     if (prev?.timer) clearInterval(prev.timer);
-    if (prev?.continuous) this._endContinuous(key);
+    if (prev?.continuousStop) prev.continuousStop();
 
     if (mode === "Stop") {
       this.active.delete(key);
@@ -45,8 +55,7 @@ export class ActionController {
       const ms = (state.intervalGt / TICKS_PER_SECOND) * 1000;
       state.timer = setInterval(() => this._performOnce(key, state), ms);
     } else if (mode === "Continuous") {
-      state.continuous = true;
-      this._startContinuous(key, state);
+      state.continuousStop = this._startContinuous(key, state);
     }
 
     this.emit();
@@ -57,111 +66,161 @@ export class ActionController {
     if (!b || !b.entity) return null;
     return { yaw: b.entity.yaw, pitch: b.entity.pitch };
   }
-  _restoreLook(look) {
-    if (!look) return;
-    try { this.bot.look(look.yaw, look.pitch, false).catch(()=>{}); } catch {}
+  _restoreLook(l) {
+    if (!l) return;
+    try { this.bot.look(l.yaw, l.pitch, false).catch(()=>{}); } catch {}
   }
 
-  // helper: are we looking within threshold at entity?
-  _isLookingAtEntity(entity, maxAngleDeg = 25) {
-    if (!this.bot.entity || !entity || !entity.position) return false;
+  _isLookingAtEntity(entity, maxDeg = 25) {
+    if (!entity || !entity.position || !this.bot.entity) return false;
     const botPos = this.bot.entity.position;
-    const toEnt = entity.position.minus(botPos);
-    const horiz = Math.atan2(toEnt.z, toEnt.x); // note: mineflayer yaw math differs; but approximate
-    const desiredYaw = horiz - Math.PI/2; // align to mineflayer yaw
-    const yawDiff = Math.abs(((desiredYaw - this.bot.entity.yaw + Math.PI) % (2*Math.PI)) - Math.PI);
-    const yawDiffDeg = Math.abs(yawDiff * 180 / Math.PI);
-    return yawDiffDeg <= maxAngleDeg;
+    const dx = entity.position.x - botPos.x;
+    const dz = entity.position.z - botPos.z;
+    const yawTo = Math.atan2(dz, dx);
+    // mineflayer yaw is rotated relative; compare difference
+    const yawDiff = Math.abs(((this.bot.entity.yaw - yawTo + Math.PI) % (2*Math.PI)) - Math.PI);
+    const yawDeg = Math.abs(yawDiff * 180 / Math.PI);
+    return yawDeg <= maxDeg;
   }
 
   async _performOnce(key, state) {
     const b = this.bot;
     if (!b) return;
-    const prevLook = this._saveLook();
+    const prev = this._saveLook();
     try {
       switch (key) {
         case "mine": {
-          // dig the block at cursor but restore look after
           const blk = (() => { try { return b.blockAtCursor(6); } catch { return null; } })();
           if (blk) await b.dig(blk).catch(()=>{});
           break;
         }
         case "attack": {
-          // only attack if we're roughly looking at it
-          const ent = b.nearestEntity();
-          if (ent && this._isLookingAtEntity(ent)) {
-            await b.attack(ent).catch(()=>{});
+          // prefer entityAtCursor (if available) so we attack what we're looking directly at
+          let target = null;
+          try { target = b.entityAtCursor ? b.entityAtCursor(6) : null; } catch {}
+          if (!target) {
+            // fallback: nearest entity but require angle check
+            try { const ne = b.nearestEntity(); if (ne && this._isLookingAtEntity(ne)) target = ne; } catch {}
           }
+          if (target) await b.attack(target).catch(()=>{});
           break;
         }
         case "place": {
-          // place without changing look: use activateItem once
-          await b.activateItem(false);
-          setTimeout(()=>{ try{ b.deactivateItem(); }catch{} }, 150);
+          // try to place against the block at cursor (without forcing look)
+          const blk = (() => { try { return b.blockAtCursor(6); } catch { return null; } })();
+          if (blk && b.heldItem) {
+            // find adjacent position / if placeBlock API exists
+            try {
+              // mineflayer place API: bot.placeBlock(referenceBlock, directionVector)
+              const vec = new Vec3(0, 1, 0);
+              await b.placeBlock(blk, vec).catch(() => {});
+            } catch {
+              // fallback: activate item (brief)
+              b.activateItem(false);
+              setTimeout(()=>{ try { b.deactivateItem(); } catch {} }, 150);
+            }
+          }
           break;
         }
         case "eat": {
-          // activate item briefly (keep orientation)
           if (b.heldItem) {
-            await b.activateItem(false);
-            setTimeout(()=>{ try{ b.deactivateItem(); }catch{} }, 1000);
+            if (typeof b.consume === "function") {
+              await b.consume().catch(()=>{});
+            } else {
+              b.activateItem(false);
+              // ensure longer duration so it finishes
+              await new Promise(r => setTimeout(r, 1500));
+              try { b.deactivateItem(); } catch {}
+            }
           }
           break;
         }
         case "drop": {
           if (b.heldItem) {
-            if (state.dropStack) await b.tossStack(b.heldItem).catch(()=>{});
+            if (state.dropStack && typeof b.tossStack === "function") await b.tossStack(b.heldItem).catch(()=>{});
             else await b.toss(b.heldItem.type, null, 1).catch(()=>{});
           }
           break;
         }
       }
-    } catch {}
-    finally { this._restoreLook(prevLook); }
+    } catch (err) {
+      // no-op
+    } finally {
+      this._restoreLook(prev);
+    }
   }
 
   _startContinuous(key, state) {
     const b = this.bot;
-    if (!b) return;
+    if (!b) return () => {};
     if (key === "mine") {
-      // repeatedly dig whatever is in cursor without changing look permanently
-      state.timer = setInterval(async () => {
-        const prev = this._saveLook();
-        try {
-          const blk = (() => { try { return b.blockAtCursor(6); } catch { return null; } })();
-          if (blk) await b.dig(blk).catch(()=>{});
-        } catch {}
-        this._restoreLook(prev);
-      }, 400);
-    } else if (key === "attack") {
-      state.timer = setInterval(async () => {
-        try {
-          const ent = b.nearestEntity();
-          if (ent && this._isLookingAtEntity(ent)) await b.attack(ent).catch(()=>{});
-        } catch {}
-      }, 400);
-    } else if (key === "place") {
-      state.timer = setInterval(async () => {
-        const prev = this._saveLook();
-        try { await b.activateItem(false); } catch {}
-        this._restoreLook(prev);
-      }, 600);
-    } else if (key === "eat") {
-      // hold eat: activateItem(true)
-      try { b.activateItem(true); } catch {}
-    } else if (key === "drop") {
-      state.timer = setInterval(async () => {
-        try { if (b.heldItem) await b.toss(b.heldItem.type, null, 1).catch(()=>{}); } catch {}
-      }, 300);
+      let running = true;
+      (async () => {
+        while (running) {
+          const prev = this._saveLook();
+          try {
+            const blk = (() => { try { return b.blockAtCursor(6); } catch { return null; } })();
+            if (blk) await b.dig(blk).catch(()=>{});
+          } catch {}
+          this._restoreLook(prev);
+          await new Promise(r => setTimeout(r, 500));
+        }
+      })();
+      return () => { running = false; };
     }
-  }
-
-  _endContinuous(key) {
-    const s = this.active.get(key);
-    if (!s) return;
-    if (s.timer) { clearInterval(s.timer); s.timer = null; }
-    if (key === "eat") try { this.bot.deactivateItem(); } catch {}
-    this.active.delete(key);
-    this.emit();
+    if (key === "attack") {
+      let running = true;
+      (async () => {
+        while (running) {
+          try {
+            let target = null;
+            try { target = b.entityAtCursor ? b.entityAtCursor(6) : null; } catch {}
+            if (!target) {
+              const ne = b.nearestEntity ? b.nearestEntity() : null;
+              if (ne && this._isLookingAtEntity(ne)) target = ne;
+            }
+            if (target) await b.attack(target).catch(()=>{});
+          } catch {}
+          await new Promise(r => setTimeout(r, 350));
+        }
+      })();
+      return () => { running = false; };
+    }
+    if (key === "place") {
+      let running = true;
+      (async () => {
+        while (running) {
+          const prev = this._saveLook();
+          try {
+            const blk = (() => { try { return b.blockAtCursor(6); } catch { return null; } })();
+            if (blk && b.heldItem) {
+              try { await b.placeBlock(blk, new Vec3(0, 1, 0)).catch(()=>{}); } catch {
+                b.activateItem(false);
+                setTimeout(()=>{ try { b.deactivateItem(); } catch {} }, 200);
+              }
+            }
+          } catch {}
+          this._restoreLook(prev);
+          await new Promise(r => setTimeout(r, 600));
+        }
+      })();
+      return () => { running = false; };
+    }
+    if (key === "eat") {
+      // hold consume if supported
+      try { if (typeof b.consume === "function") { /* consume is blocking and returns when finished */ } else { b.activateItem(true); } } catch {}
+      return () => { try { if (typeof b.deactivateItem === "function") b.deactivateItem(); } catch {} };
+    }
+    if (key === "drop") {
+      let running = true;
+      (async () => {
+        while (running) {
+          try { if (b.heldItem) await b.toss(b.heldItem.type, null, 1).catch(()=>{}); } catch {}
+          await new Promise(r => setTimeout(r, 300));
+        }
+      })();
+      return () => { running = false; };
+    }
+    return () => {};
   }
 }
