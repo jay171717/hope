@@ -2,6 +2,7 @@ import express from "express";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import dotenv from "dotenv";
+import crypto from "crypto";
 import { BotManager } from "./botManager.js";
 import { ServerStatusPoller } from "./statusPoller.js";
 
@@ -20,52 +21,54 @@ const io = new Server(http, { cors: { origin: "*" } });
 app.use(express.static("public"));
 app.use(express.json());
 
-const bots = new BotManager(io, SERVER_HOST, SERVER_PORT, FIXED_VERSION, HEAD_BASE);
+const manager = new BotManager(io, SERVER_HOST, SERVER_PORT, FIXED_VERSION, HEAD_BASE);
 const poller = new ServerStatusPoller(io, SERVER_HOST, SERVER_PORT);
 poller.start();
 
-app.get("/api/bots", (req, res) => res.json(bots.list()));
+function genId(name) {
+  return `${(name||"bot").replace(/\W+/g,"_")}_${crypto.randomBytes(3).toString("hex")}`;
+}
 
-io.on("connection", (socket) => {
-  socket.emit("bot:list", bots.list());
+io.on("connection", socket => {
+  socket.emit("bot:list", manager.list());
 
-  socket.on("bot:add", ({ id, name }) => {
+  socket.on("bot:add", ({ name }) => {
     try {
-      socket.emit("bot:added", bots.addBot({ id, name }));
-    } catch (e) {
-      socket.emit("error:toast", e.message);
-    }
+      const id = genId(name || "bot");
+      const info = manager.addBot({ id, name });
+      socket.emit("bot:added", info);
+      manager.broadcastList();
+    } catch (err) { socket.emit("error:toast", err.message || String(err)); }
   });
-  socket.on("bot:remove", (id) => bots.removeBot(id));
-  socket.on("bot:toggle", ({ id, on }) => bots.toggleConnection(id, !!on));
-  socket.on("bot:desc", ({ id, text }) => bots.setDescription(id, text));
 
-  socket.on("bot:chat", ({ id, text }) => bots.chat(id, text));
-  socket.on("bot:respawn", (id) => bots.respawn(id));
+  socket.on("bot:remove", id => manager.removeBot(id));
+  socket.on("bot:toggle", ({ id, on }) => manager.toggleConnection(id, !!on));
+  socket.on("bot:desc", ({ id, text }) => manager.setDescription(id, text));
 
-  socket.on("bot:holdSlot", ({ id, index, hand }) =>
-    bots.holdInventorySlot(id, index, hand)
-  );
-  socket.on("bot:unequipArmor", ({ id, part }) => bots.unequipArmor(id, part));
+  socket.on("bot:chat", ({ id, text }) => manager.chat(id, text));
+  socket.on("bot:respawn", id => manager.respawn(id));
 
-  socket.on("bot:moveContinuous", ({ id, dir, on }) =>
-    bots.setContinuousMove(id, dir, on)
-  );
-  socket.on("bot:jumpOnce", (id) => bots.jumpOnce(id));
-  socket.on("bot:sneakToggle", (id) => bots.toggleSneak(id));
-  socket.on("bot:gotoXYZ", ({ id, x, y, z }) => bots.gotoXYZ(id, x, y, z));
+  socket.on("bot:equipSlot", ({ id, index, hand }) => manager.equipSlot(id, index, hand));
+  socket.on("bot:holdSlot", ({ id, index }) => manager.equipSlot(id, index, "main")); // compatibility
 
-  socket.on("bot:rotateStep", ({ id, dyaw, dpitch }) =>
-    bots.rotateStep(id, dyaw, dpitch)
-  );
+  socket.on("bot:unequipArmor", ({ id, part }) => manager.unequipArmor?.(id, part));
+
+  socket.on("bot:moveContinuous", ({ id, dir, on }) => manager.setContinuousMove(id, dir, on));
+  socket.on("bot:jumpOnce", id => manager.jumpOnce(id));
+  socket.on("bot:toggleSneak", id => manager.toggleSneak(id));
+  socket.on("bot:stopPath", id => manager.stopPath(id));
+  socket.on("bot:gotoXYZ", ({ id, x, y, z }) => manager.gotoXYZ(id, x, y, z));
+
+  socket.on("bot:rotateStep", ({ id, dyaw, dpitch }) => manager.rotateStep(id, dyaw, dpitch));
+  socket.on("bot:lookAngles", ({ id, yaw, pitch }) => manager.lookAtAngles(id, yaw, pitch));
+  socket.on("bot:lookAt", ({ id, x, y, z }) => manager.lookAtCoord(id, x, y, z));
 
   socket.on("bot:setAction", ({ id, action, mode, intervalGt, dropStack }) =>
-    bots.setActionMode(id, action, mode, { intervalGt, dropStack })
+    manager.setActionMode(id, action, mode, { intervalGt, dropStack })
   );
 
-  socket.on("bot:setTweaks", ({ id, toggles }) =>
-    bots.setTweaks(id, toggles)
-  );
+  socket.on("bot:setTweaks", ({ id, toggles }) => manager.setTweaks(id, toggles));
+  socket.on("bot:autoSleep", ({ id, on }) => manager.setTweaks(id, { autoSleep: !!on }));
 });
 
 http.listen(PORT, () => {
