@@ -1,6 +1,6 @@
 import mineflayer from "mineflayer";
 import pathfinderPkg from "mineflayer-pathfinder";
-const { pathfinder, goals } = pathfinderPkg;
+const { pathfinder, goals, Movements } = pathfinderPkg;
 import mcdataFactory from "minecraft-data";
 import { Vec3 } from "vec3";
 import { ActionController } from "./actions.js";
@@ -11,13 +11,11 @@ export class BotManager {
     this.serverHost = serverHost;
     this.serverPort = serverPort;
     this.fixedVersion = fixedVersion || null;
-    this.headBase = headBase;
-    this.bots = new Map(); // id -> {bot, info, actions, createdAt, description, toggledConnected}
+    this.headBase = headBase || "https://minotar.net/helm";
+    this.bots = new Map(); // id -> entry
   }
 
-  list() {
-    return [...this.bots.entries()].map(([id, b]) => this._publicBotInfo(id, b));
-  }
+  list() { return [...this.bots.entries()].map(([id, b]) => this._publicBotInfo(id, b)); }
 
   _publicBotInfo(id, data) {
     return {
@@ -32,20 +30,17 @@ export class BotManager {
     };
   }
 
-  broadcastList() {
-    this.io.emit("bot:list", this.list());
-  }
+  broadcastList() { this.io.emit("bot:list", this.list()); }
 
   addBot({ id, name, auth="offline" }) {
+    // id parameter is expected to be name (we treat name as unique id)
     if (this.bots.has(id)) throw new Error("Bot id already exists");
     const entry = {
       id, name, auth, bot: null, mcData: null,
-      info: {},
-      actions: null,
-      toggledConnected: true,
-      description: "",
-      createdAt: Date.now(),
-      lastSeen: null
+      info: {}, actions: null,
+      toggledConnected: true, description: "",
+      createdAt: Date.now(), lastSeen: null,
+      toggles: { autoReconnect: true, autoRespawn: true, autoSprint: true, autoSleep: false, autoMinePlace: false }
     };
     this.bots.set(id, entry);
     this._spawn(entry);
@@ -81,7 +76,7 @@ export class BotManager {
       host: this.serverHost,
       port: this.serverPort,
       username: entry.name,
-      auth: entry.auth, // "offline" for cracked
+      auth: entry.auth || "offline",
       version: this.fixedVersion || false
     });
 
@@ -90,33 +85,39 @@ export class BotManager {
     entry.actions.onUpdate(list => this.io.emit("bot:activeActions", { id: entry.id, actions: list }));
 
     bot.loadPlugin(pathfinder);
+
     bot.once("spawn", () => {
       entry.lastSeen = Date.now();
       entry.mcData = mcdataFactory(bot.version);
+      // set pathfinder movements and respect autoMinePlace toggle
+      try {
+        if (typeof Movements !== "undefined") {
+          const mv = new Movements(bot, entry.mcData);
+          if (entry.toggles && entry.toggles.autoMinePlace === false) {
+            mv.allowDig = false;
+            mv.canDig = false;
+          }
+          bot.pathfinder.setMovements(mv);
+        }
+      } catch {}
       this._wireTelemetry(entry);
       this.io.emit("bot:status", { id: entry.id, status: "online" });
       this.broadcastList();
+      this.io.emit("bot:log", { id: entry.id, line: `Spawned ${entry.name}` });
     });
 
     bot.on("end", () => {
       this.io.emit("bot:status", { id: entry.id, status: "offline" });
       entry.actions?.stopAll();
       entry.bot = null;
-      setTimeout(() => {
-        if (entry.toggledConnected) this._spawn(entry);
-      }, 3000); // Auto-reconnect default ON
+      // auto reconnect if toggled
+      setTimeout(() => { if (entry.toggledConnected) this._spawn(entry); }, 3000);
       this.broadcastList();
     });
 
-    bot.on("kicked", (reason) => {
-      this.io.emit("bot:log", { id: entry.id, line: `Kicked: ${reason}` });
-    });
-    bot.on("error", (err) => {
-      this.io.emit("bot:log", { id: entry.id, line: `Error: ${err.message}` });
-    });
-    bot.on("messagestr", (msg, pos) => {
-      this.io.emit("bot:chat", { id: entry.id, line: msg });
-    });
+    bot.on("kicked", (reason) => { this.io.emit("bot:log", { id: entry.id, line: `Kicked: ${reason}` }); });
+    bot.on("error", (err) => { this.io.emit("bot:log", { id: entry.id, line: `Error: ${err.message}` }); });
+    bot.on("messagestr", (msg) => { this.io.emit("bot:chat", { id: entry.id, line: msg }); });
   }
 
   _wireTelemetry(entry) {
@@ -130,12 +131,8 @@ export class BotManager {
       const xp = b.experience?.level ?? null;
 
       let lookingBlock = null, lookingEntity = null;
-      try {
-        if (b.blockAtCursor) lookingBlock = b.blockAtCursor(5) || null;
-      } catch {}
-      try {
-        if (b.nearestEntity) lookingEntity = b.nearestEntity();
-      } catch {}
+      try { if (b.blockAtCursor) lookingBlock = b.blockAtCursor(5) || null; } catch {}
+      try { if (b.nearestEntity) lookingEntity = b.nearestEntity(); } catch {}
 
       const dim = b.game?.dimension || "unknown";
       const pos = ent?.position ? { x: ent.position.x, y: ent.position.y, z: ent.position.z } : null;
@@ -169,12 +166,15 @@ export class BotManager {
         inventory: inv
       });
     };
+
     entry._telemetryTimer = setInterval(sendStatus, 1000);
+    // immediate initial send
+    setTimeout(sendStatus, 200);
   }
 
   _serializeInventory(b) {
     const inv = b.inventory;
-    const slots = Array.from({ length: 36 }, (_, i) => inv.slots[9 + i] || null); // 9x4 (skip container slots)
+    const slots = Array.from({ length: 36 }, (_, i) => inv.slots[9 + i] || null);
     const armorSlots = {
       head: inv.slots[5] || null,
       chest: inv.slots[6] || null,
@@ -182,7 +182,7 @@ export class BotManager {
       feet: inv.slots[8] || null
     };
     const mainHand = b.heldItem || null;
-    const offHand = inv.slots[45] || null; // offhand
+    const offHand = inv.slots[45] || null;
 
     const toItem = it => it ? ({
       name: it.name, count: it.count,
@@ -206,36 +206,33 @@ export class BotManager {
   }
 
   // ---------- Commands from UI ----------
+  chat(id, text) { const e = this.bots.get(id); if (!e?.bot) return; e.bot.chat(text); }
 
-  chat(id, text) {
-    const e = this.bots.get(id); if (!e?.bot) return;
-    e.bot.chat(text);
-  }
-
-  respawn(id) {
-    const e = this.bots.get(id); if (!e?.bot) return;
-    try { e.bot.respawn(); } catch {}
-  }
+  respawn(id) { const e = this.bots.get(id); if (!e?.bot) return; try { e.bot.respawn(); } catch {} }
 
   swapHands(id) {
     const e = this.bots.get(id); if (!e?.bot) return;
-    e.bot.swapHands().catch(() => {});
+    try { e.bot.swapHands().catch(err => this.io.emit("bot:log",{ id, line:`swapHands failed: ${err.message}` })); } catch {}
   }
 
   holdInventorySlot(id, index) {
     const e = this.bots.get(id); if (!e?.bot) return;
     const b = e.bot;
+    if (index === -1) { // unequip
+      b.unequip('hand').catch(()=>{});
+      return;
+    }
     const slot = b.inventory.slots[9 + index];
-    if (!slot) return;
-    b.equip(slot, "hand").catch(() => {});
+    if (!slot) { b.unequip('hand').catch(()=>{}); return; }
+    b.equip(slot, "hand").catch(()=>{});
   }
 
   unequipArmor(id, part) {
     const e = this.bots.get(id); if (!e?.bot) return;
     const b = e.bot;
-    if (b.inventory.emptySlotCount() <= 0) return; // no space
+    if (b.inventory.emptySlotCount() <= 0) return;
     const mapping = { head: "head", chest: "torso", legs: "legs", feet: "feet" };
-    b.unequip(mapping[part]).catch(() => {});
+    b.unequip(mapping[part]).catch(()=>{});
   }
 
   // Movement
@@ -243,6 +240,7 @@ export class BotManager {
     const e = this.bots.get(id); if (!e?.bot) return;
     const map = { W: "forward", A: "left", S: "back", D: "right" };
     const key = map[dir]; if (!key) return;
+    // IMPORTANT: do NOT change yaw/pitch here — only set control state
     e.bot.setControlState(key, !!on);
   }
 
@@ -250,12 +248,13 @@ export class BotManager {
     const e = this.bots.get(id); if (!e?.bot) return;
     const b = e.bot;
     b.setControlState('jump', true);
-    setTimeout(() => b.setControlState('jump', false), 200);
+    setTimeout(() => { try { b.setControlState('jump', false); } catch {} }, 200);
   }
 
   moveBlocks(id, dir, blocks = 5) {
     const e = this.bots.get(id); if (!e?.bot) return;
     const b = e.bot;
+    // compute target relative to entity yaw but DO NOT change yaw/pitch permanently here
     const pos = b.entity.position.clone();
     const yaw = b.entity.yaw;
     const forward = new Vec3(Math.cos(yaw), 0, Math.sin(yaw));
@@ -265,19 +264,23 @@ export class BotManager {
     if (dir === "S") target = pos.minus(forward.scaled(blocks));
     if (dir === "A") target = pos.minus(right.scaled(blocks));
     if (dir === "D") target = pos.plus(right.scaled(blocks));
+    // set pathfinder goal (this may rotate bot while pathfinding - intended)
     b.pathfinder.setGoal(new goals.GoalBlock(Math.round(target.x), Math.round(target.y), Math.round(target.z)));
   }
 
   gotoXYZ(id, x, y, z) {
     const e = this.bots.get(id); if (!e?.bot) return;
     const b = e.bot;
-    // Try exact XYZ first
-    const attempt = (gx, gy, gz) => b.pathfinder.setGoal(new goals.GoalBlock(gx, gy, gz), true);
-    attempt(Math.round(x), Math.round(y), Math.round(z));
-    // If fails, try nearest XZ with any Y
-    setTimeout(() => {
-      if (!b.pathfinder.isMoving()) attempt(Math.round(x), Math.round(b.entity.position.y), Math.round(z));
-    }, 2000);
+    try {
+      // first try exact block
+      b.pathfinder.setGoal(new goals.GoalBlock(Math.round(x), Math.round(y), Math.round(z)), true);
+      // if not moving after 2s, fallback to XZ-projection
+      setTimeout(() => {
+        try {
+          if (!b.pathfinder.isMoving()) b.pathfinder.setGoal(new goals.GoalXZ(Math.round(x), Math.round(z)));
+        } catch {}
+      }, 2000);
+    } catch {}
   }
 
   // Looking
@@ -286,7 +289,7 @@ export class BotManager {
     const b = e.bot;
     const yaw = b.entity.yaw + (dYawDeg * Math.PI / 180);
     const pitch = b.entity.pitch + (dPitchDeg * Math.PI / 180);
-    b.look(yaw, pitch, true).catch(() => {});
+    b.look(yaw, pitch, true).catch(()=>{});
   }
 
   lookAtAngles(id, yawDeg, pitchDeg) {
@@ -294,13 +297,13 @@ export class BotManager {
     const b = e.bot;
     const yaw = yawDeg * Math.PI / 180;
     const pitch = pitchDeg * Math.PI / 180;
-    b.look(yaw, pitch, true).catch(() => {});
+    b.look(yaw, pitch, true).catch(()=>{});
   }
 
   lookAtCoord(id, x, y, z) {
     const e = this.bots.get(id); if (!e?.bot) return;
     const b = e.bot;
-    b.lookAt(new Vec3(x, y, z)).catch(() => {});
+    try { b.lookAt(new Vec3(x, y, z)).catch(()=>{}); } catch {}
   }
 
   // Actions
@@ -309,14 +312,17 @@ export class BotManager {
     e.actions.setMode(action, mode, options);
   }
 
-  // Misc toggles (auto features)
+  // Misc toggles
   setTweaks(id, toggles) {
-    const e = this.bots.get(id); if (!e?.bot) return;
+    const e = this.bots.get(id); if (!e) return;
+    e.toggles = { ...e.toggles, ...toggles };
+
     const b = e.bot;
-    // Auto-sprint
-    if (toggles.autoSprint !== undefined) b.setControlState('sprint', !!toggles.autoSprint);
-    // Auto-respawn
-    if (toggles.autoRespawn !== undefined) {
+    if (b && toggles.autoSprint !== undefined) {
+      try { b.setControlState('sprint', !!toggles.autoSprint); } catch {}
+    }
+
+    if (toggles.autoRespawn !== undefined && b) {
       if (toggles.autoRespawn) {
         if (!e._resp) {
           e._resp = () => setTimeout(() => { try { b.respawn(); } catch {} }, 500);
@@ -327,11 +333,32 @@ export class BotManager {
         e._resp = null;
       }
     }
-    // Auto-reconnect is handled by toggledConnected + on 'end'
-    // Auto-jump: just keep jump when colliding – simplified: not implemented (MC has client auto-jump; headless doesn’t)
+
+    if (toggles.autoReconnect !== undefined) {
+      e.toggledConnected = !!toggles.autoReconnect;
+      if (e.toggledConnected && !e.bot) this._spawn(e);
+      if (!e.toggledConnected && e.bot) e.bot.end("AutoReconnect disabled");
+    }
+
+    // autoSleep toggling is handled separately by enableAutoSleep
+    if (toggles.autoSleep !== undefined) {
+      this.enableAutoSleep(id, !!toggles.autoSleep);
+    }
+
+    // autoMinePlace must be applied to movements if bot exists
+    if (toggles.autoMinePlace !== undefined) {
+      try {
+        if (b && b.pathfinder && typeof Movements !== "undefined") {
+          const mv = new Movements(b, e.mcData || mcdataFactory(b.version));
+          if (e.toggles.autoMinePlace === false) { mv.allowDig = false; mv.canDig = false; }
+          b.pathfinder.setMovements(mv);
+        }
+      } catch {}
+    }
+
+    this.io.emit("bot:toggles", { id, toggles: e.toggles });
   }
 
-  // Auto-sleep (every night in overworld within radius)
   enableAutoSleep(id, on) {
     const e = this.bots.get(id); if (!e?.bot) return;
     const b = e.bot;
@@ -341,23 +368,20 @@ export class BotManager {
         try {
           const dim = b.game?.dimension || "";
           if (!/overworld/i.test(dim)) return;
-          const time = b.time?.timeOfDay || 0; // 0..24000
+          const time = b.time?.timeOfDay || 0;
           const isNight = time > 12541 && time < 23458;
           if (!isNight) return;
-          // search nearby beds within ~10 blocks
           const center = b.entity.position;
           const candidates = [];
-          for (let dx = -10; dx <= 10; dx++) {
-            for (let dz = -10; dz <= 10; dz++) {
-              const pos = center.offset(dx, 0, dz);
-              const block = b.blockAt(pos);
-              if (block?.name?.includes("bed")) candidates.push(block);
-            }
+          for (let dx = -10; dx <= 10; dx++) for (let dz = -10; dz <= 10; dz++) {
+            const pos = center.offset(dx, 0, dz);
+            const block = b.blockAt(pos);
+            if (block?.name?.includes("bed")) candidates.push(block);
           }
           if (candidates.length) {
             const bed = candidates[0];
             await b.pathfinder.goto(new goals.GoalBlock(bed.position.x, bed.position.y, bed.position.z));
-            await b.sleep(bed);
+            try { await b.sleep(bed); } catch {}
           }
         } catch {}
       }, 5000);
