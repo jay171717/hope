@@ -21,10 +21,12 @@
       </div>
       <div class="right">
         <div class="players">
-          <h3>Online Players</h3>
+          <h3>Non-Bot Players</h3>
           <div id="svPlayers" class="avatars"></div>
-          <h3>Non-bot Players</h3>
-          <div id="svNonBotPlayers" class="avatars"></div>
+        </div>
+        <div class="players">
+          <h3>Bots</h3>
+          <div id="botPlayers" class="avatars"></div>
         </div>
       </div>
     </div>
@@ -35,7 +37,6 @@
       <div class="toolbar">
         <h2>Bots</h2>
         <div class="add-bot">
-          <!-- removed ID field; username will act as id -->
           <input id="botName" placeholder="Bot username"/>
           <select id="botAuth">
             <option value="offline" selected>Cracked (offline)</option>
@@ -47,7 +48,7 @@
       <div id="botList" class="bot-list"></div>
     </section>
 
-    <section id="botPanel" class="grid2" style="display:none;">
+    <section id="botPanel" class="grid2">
       <div class="card" id="statusPanel">
         <div class="panel-header">
           <h2>Status</h2>
@@ -120,16 +121,15 @@
             <div class="mv-opts">
               <label>Mode:
                 <select id="mvMode">
-                  <option value="press">Press to move</option>
-                  <option value="blocks">X blocks</option>
+                  <option value="press">Press to Move</option>
+                  <option value="blocks">X Blocks</option>
                   <option value="continuous">Continuous</option>
                 </select>
               </label>
-              <label>Blocks: <input id="mvBlocks" type="number" value="5" min="1" max="100"/></label>
-              <button id="mvGoBlocks">Move X Blocks</button>
-              <label><input id="mvContinuous" type="checkbox"/> Continuous (legacy)</label>
-              <button id="mvStop">Stop Move</button>
+              <label>X: <input id="mvBlocks" type="number" value="5" min="1" max="100"/></label>
+              <button id="mvStop">Stop</button>
               <button id="mvJump">Jump</button>
+              <button id="mvSneak">Sneak</button>
             </div>
             <div class="goto">
               <h4>Pathfind to XYZ</h4>
@@ -137,6 +137,7 @@
               <input id="gotoY" placeholder="Y" type="number"/>
               <input id="gotoZ" placeholder="Z" type="number"/>
               <button id="gotoBtn">Go</button>
+              <button id="stopGotoBtn">Stop Pathfinding</button>
             </div>
           </div>
           <div>
@@ -172,26 +173,26 @@
       <div class="card" id="actionsPanel">
         <h2>Actions</h2>
         <div class="actions">
-          <div class="action" data-action="leftClick">
-            <h4>Left Click</h4>
+          <div class="action" data-action="mine">
+            <h4>Mine</h4>
             <select class="mode"><option>Once</option><option>Interval</option><option>Continuous</option><option>Stop</option></select>
             <label>Interval (gt): <input class="gt" type="number" value="10"/></label>
             <button class="apply">Apply</button>
           </div>
-          <div class="action" data-action="rightClick">
-            <h4>Right Click</h4>
+          <div class="action" data-action="attack">
+            <h4>Attack</h4>
             <select class="mode"><option>Once</option><option>Interval</option><option>Continuous</option><option>Stop</option></select>
             <label>Interval (gt): <input class="gt" type="number" value="10"/></label>
             <button class="apply">Apply</button>
           </div>
-          <div class="action" data-action="jump">
-            <h4>Jump</h4>
+          <div class="action" data-action="place">
+            <h4>Place</h4>
             <select class="mode"><option>Once</option><option>Interval</option><option>Continuous</option><option>Stop</option></select>
-            <label>Interval (gt): <input class="gt" type="number" value="20"/></label>
+            <label>Interval (gt): <input class="gt" type="number" value="10"/></label>
             <button class="apply">Apply</button>
           </div>
-          <div class="action" data-action="sneak">
-            <h4>Sneak</h4>
+          <div class="action" data-action="eat">
+            <h4>Eat</h4>
             <select class="mode"><option>Once</option><option>Interval</option><option>Continuous</option><option>Stop</option></select>
             <label>Interval (gt): <input class="gt" type="number" value="20"/></label>
             <button class="apply">Apply</button>
@@ -209,11 +210,12 @@
       <div class="card" id="miscPanel">
         <h2>Misc Tweaks</h2>
         <div class="toggles">
-          <label><input type="checkbox" id="twAutoReconnect" checked /> Auto-Reconnect</label>
+          <label><input type="checkbox" id="twAutoReconnect" checked/> Auto-Reconnect</label>
           <label><input type="checkbox" id="twAutoRespawn" checked/> Auto-Respawn</label>
           <label><input type="checkbox" id="twAutoSprint" checked/> Auto-Sprint</label>
-          <label><input type="checkbox" id="twAutoSleep" /> Auto-Sleep (Overworld only)</label>
-          <label><input type="checkbox" id="twAutoMinePlace" /> Auto Mine/Place (pathfinder) — off = parkour only</label>
+          <label><input type="checkbox" id="twAutoSleep" checked/> Auto-Sleep (Overworld only)</label>
+          <label><input type="checkbox" id="twAutoEat"/> Auto-Eat</label>
+          <label>Follow Player: <input type="text" id="twFollowPlayer" placeholder="Player name"/></label>
         </div>
       </div>
     </section>
