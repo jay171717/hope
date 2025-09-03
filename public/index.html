@@ -1,229 +1,75 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <title>Minecraft Bot Control</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <link rel="stylesheet" href="style.css"/>
+  <meta charset="UTF-8">
+  <title>Minecraft Web Bots</title>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header>
-    <div id="serverStatus" class="card server">
-      <div class="left">
-        <h1>Minecraft Bot Console</h1>
-        <div class="status-line">
-          <span id="svOnline" class="badge off">Offline</span>
-          <span id="svAddr"></span>
-          <span id="svVersion"></span>
-          <span id="svUptime"></span>
+    <h1>Minecraft Web Bots</h1>
+  </header>
+  <main>
+    <div class="panel" id="serverPanel">
+      <h2>Server Status</h2>
+      <div id="serverStatus"></div>
+    </div>
+
+    <div class="panel" id="botsPanel">
+      <h2>Bots</h2>
+      <div id="botList"></div>
+      <form id="addBotForm">
+        <input id="botName" placeholder="Bot Username" required>
+        <button type="submit">Add Bot</button>
+      </form>
+    </div>
+
+    <div class="panel" id="botPanel">
+      <h2 id="botTitle">Bot Console</h2>
+      <div id="botControls">
+        <div>
+          <h3>Status</h3>
+          <pre id="botStatus">No bot selected</pre>
         </div>
-        <div id="svMotd" class="motd"></div>
-      </div>
-      <div class="right">
-        <div class="players">
-          <h3>Online Players</h3>
-          <div id="svPlayers" class="avatars"></div>
+        <div>
+          <h3>Inventory</h3>
+          <select id="handSelect">
+            <option value="hand">Main Hand</option>
+            <option value="off-hand">Off Hand</option>
+          </select>
+          <div id="invGrid"></div>
+        </div>
+        <div>
+          <h3>Movement</h3>
+          <div class="wasd">
+            <button data-dir="W">W</button>
+            <button data-dir="A">A</button>
+            <button data-dir="S">S</button>
+            <button data-dir="D">D</button>
+          </div>
+          <button id="jumpBtn">Jump</button>
+          <button id="sneakBtn">Sneak</button>
+        </div>
+        <div>
+          <h3>Actions</h3>
+          <button data-action="mine">Mine</button>
+          <button data-action="place">Place</button>
+          <button data-action="attack">Attack</button>
+          <button data-action="eat">Eat</button>
+          <button data-action="drop">Drop</button>
+        </div>
+        <div>
+          <h3>Misc</h3>
+          <label><input type="checkbox" id="autoRespawn"> Auto Respawn</label><br>
+          <label><input type="checkbox" id="autoReconnect"> Auto Reconnect</label><br>
+          <label><input type="checkbox" id="autoSprint"> Auto Sprint</label><br>
+          <label><input type="checkbox" id="autoEat"> Auto Eat</label><br>
+          <label><input type="checkbox" id="followPlayer"> Follow Player</label><br>
+          <label><input type="checkbox" id="autoMinePlace"> Auto Mine/Place</label>
         </div>
       </div>
     </div>
-  </header>
-
-  <main>
-    <section class="card">
-      <div class="toolbar">
-        <h2>Bots</h2>
-        <div class="add-bot">
-          <input id="botName" placeholder="Bot username"/>
-          <button id="addBot">Add Bot (cracked)</button>
-        </div>
-      </div>
-      <div id="botList" class="bot-list"></div>
-    </section>
-
-    <section id="botPanel" class="grid2" style="display:none">
-      <div class="card" id="statusPanel">
-        <div class="panel-header">
-          <h2>Status</h2>
-          <input id="botDesc" maxlength="127" placeholder="Add a short description..."/>
-        </div>
-        <div class="status-grid">
-          <div><b>Uptime:</b> <span id="stUptime">—</span></div>
-          <div><b>Dim:</b> <span id="stDim">—</span></div>
-          <div><b>Pos:</b> <span id="stPos">—</span></div>
-          <div><b>HP/Hunger:</b> <span id="stHH">—</span></div>
-          <div><b>XP:</b> <span id="stXP">—</span></div>
-          <div><b>Effects:</b> <span id="stFx">—</span></div>
-          <div><b>Yaw/Pitch:</b> <span id="stYawPitch">—</span></div>
-          <div><b>Looking:</b> <span id="stLooking">—</span></div>
-        </div>
-        <div class="chat-row">
-          <input id="chatInput" placeholder="Type to chat/command..."/>
-          <button id="chatSend">Send</button>
-          <button id="btnRespawn">Respawn</button>
-        </div>
-        <div>
-          <h3>Active actions</h3>
-          <div id="activeActions" class="chips"></div>
-        </div>
-        <div>
-          <h3>Debug log</h3>
-          <pre id="debugLog"></pre>
-        </div>
-      </div>
-
-      <div class="card" id="inventoryPanel">
-        <h2>Inventory</h2>
-        <div class="inv">
-          <div class="grid" id="invGrid"></div>
-          <div class="equip">
-            <div class="equip-row">
-              <div class="equip-slot" data-armor="head">Head</div>
-              <div class="equip-slot" data-armor="chest">Chest</div>
-              <div class="equip-slot" data-armor="legs">Legs</div>
-              <div class="equip-slot" data-armor="feet">Feet</div>
-            </div>
-            <div class="hands">
-              <div class="hand">
-                <h4>Main Hand</h4>
-                <div id="mainHand" class="slot"></div>
-              </div>
-              <div class="hand">
-                <h4>Off Hand</h4>
-                <div id="offHand" class="slot"></div>
-              </div>
-            </div>
-
-            <label style="margin-top:8px;">Selected Hand:
-              <select id="selectedHand">
-                <option value="main">Main Hand</option>
-                <option value="off">Off Hand</option>
-              </select>
-            </label>
-
-          </div>
-        </div>
-      </div>
-
-      <div class="card" id="movementPanel">
-        <h2>Movement / Looking</h2>
-        <div class="mv-grid">
-          <div>
-            <h3>Move</h3>
-            <div class="wasd">
-              <button data-mv="W">W</button>
-              <div class="row">
-                <button data-mv="A">A</button>
-                <button data-mv="S">S</button>
-                <button data-mv="D">D</button>
-              </div>
-            </div>
-            <div class="mv-opts">
-              <label>Mode:
-                <select id="mvMode">
-                  <option value="press">Press to Move</option>
-                  <option value="continuous">Continuous</option>
-                </select>
-              </label>
-              <button id="mvStop">Stop</button>
-              <button id="mvJump">Jump</button>
-              <button id="mvSneak">Sneak</button>
-            </div>
-            <div class="goto">
-              <h4>Pathfind to XYZ</h4>
-              <input id="gotoX" placeholder="X" type="number"/>
-              <input id="gotoY" placeholder="Y" type="number"/>
-              <input id="gotoZ" placeholder="Z" type="number"/>
-              <button id="gotoBtn">Go</button>
-              <button id="stopGotoBtn">Stop Pathfinding</button>
-            </div>
-          </div>
-          <div>
-            <h3>Look</h3>
-            <div class="rot">
-              <label>Step (°): <input id="rotStep" type="number" value="15" min="1" max="90"/></label>
-              <div class="plus">
-                <button data-rot="up">↑</button>
-                <div>
-                  <button data-rot="left">←</button>
-                  <button data-rot="right">→</button>
-                </div>
-                <button data-rot="down">↓</button>
-              </div>
-            </div>
-            <div class="angles">
-              <h4>Set angles</h4>
-              <input id="yawSet" type="number" placeholder="Yaw °"/>
-              <input id="pitchSet" type="number" placeholder="Pitch °"/>
-              <button id="setAngles">Apply</button>
-            </div>
-            <div class="lookat">
-              <h4>Look at</h4>
-              <input id="lookX" type="number" placeholder="X"/>
-              <input id="lookY" type="number" placeholder="Y"/>
-              <input id="lookZ" type="number" placeholder="Z"/>
-              <button id="lookBtn">Look</button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="card" id="actionsPanel">
-        <h2>Actions</h2>
-        <div class="actions">
-          <div class="action" data-action="mine">
-            <h4>Mine</h4>
-            <select class="mode"><option>Once</option><option>Interval</option><option>Stop</option></select>
-            <label>Interval (gt): <input class="gt" type="number" value="10"/></label>
-            <button class="apply">Apply</button>
-          </div>
-
-          <div class="action" data-action="attack">
-            <h4>Attack</h4>
-            <select class="mode"><option>Once</option><option>Interval</option><option>Stop</option></select>
-            <label>Interval (gt): <input class="gt" type="number" value="10"/></label>
-            <button class="apply">Apply</button>
-          </div>
-
-          <div class="action" data-action="place">
-            <h4>Place</h4>
-            <select class="mode"><option>Once</option><option>Interval</option><option>Stop</option></select>
-            <label>Interval (gt): <input class="gt" type="number" value="10"/></label>
-            <button class="apply">Apply</button>
-          </div>
-
-          <div class="action" data-action="eat">
-            <h4>Eat</h4>
-            <select class="mode"><option>Once</option><option>Interval</option><option>Stop</option></select>
-            <label>Interval (gt): <input class="gt" type="number" value="20"/></label>
-            <button class="apply">Apply</button>
-          </div>
-
-          <div class="action" data-action="drop">
-            <h4>Drop</h4>
-            <select class="mode"><option>Once</option><option>Interval</option><option>Stop</option></select>
-            <label>Interval (gt): <input class="gt" type="number" value="5"/></label>
-            <label><input class="dropStack" type="checkbox"/> Drop Stack</label>
-            <button class="apply">Apply</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="card" id="miscPanel">
-        <h2>Misc Tweaks</h2>
-        <div class="toggles">
-          <label><input type="checkbox" id="twAutoReconnect" /> Auto-Reconnect</label>
-          <label><input type="checkbox" id="twAutoRespawn" /> Auto-Respawn</label>
-          <label><input type="checkbox" id="twAutoSprint" /> Auto-Sprint</label>
-          <label><input type="checkbox" id="twAutoEat" /> Auto-Eat (hunger≤10 or health≤10)</label>
-          <label><input type="checkbox" id="twAutoMinePlace" /> Auto Mine/Place (allow pathfind that may mine/place)</label>
-          <label><input type="checkbox" id="twAutoSleep" /> Auto-Sleep (Overworld)</label>
-          <label><input type="checkbox" id="twFollowToggle" /> Follow Player</label>
-          <label>Follow Player Name: <input type="text" id="twFollowPlayer" placeholder="player name" disabled/></label>
-        </div>
-      </div>
-    </section>
   </main>
-
   <script src="/socket.io/socket.io.js"></script>
   <script src="app.js"></script>
 </body>
