@@ -12,7 +12,7 @@ export class BotManager {
     this.serverPort = serverPort;
     this.fixedVersion = fixedVersion || null;
     this.headBase = headBase;
-    this.bots = new Map(); // id -> entry
+    this.bots = new Map();
   }
 
   list() {
@@ -43,7 +43,7 @@ export class BotManager {
     const e = {
       id: useId,
       name,
-      auth: "offline", // force cracked/offline
+      auth: "offline",
       bot: null,
       mcData: null,
       actions: null,
@@ -74,16 +74,14 @@ export class BotManager {
   }
 
   setDescription(id, text) {
-    const e = this.bots.get(id);
-    if (!e) return;
+    const e = this.bots.get(id); if (!e) return;
     e.description = String(text || "").slice(0, 127);
     this.io.emit("bot:description", { id, description: e.description });
     this.broadcastList();
   }
 
   toggleConnection(id, shouldConnect) {
-    const e = this.bots.get(id);
-    if (!e) return;
+    const e = this.bots.get(id); if (!e) return;
     e.toggledConnected = !!shouldConnect;
     if (e.toggledConnected && !e.bot) this._spawn(e);
     if (!e.toggledConnected && e.bot) e.bot.end("User toggled disconnect");
@@ -91,11 +89,8 @@ export class BotManager {
   }
 
   removeBot(id) {
-    const e = this.bots.get(id);
-    if (!e) return;
-    if (e.bot) {
-      try { e.bot.end("Deleted by user"); } catch {}
-    }
+    const e = this.bots.get(id); if (!e) return;
+    if (e.bot) try { e.bot.end("Deleted by user"); } catch {}
     this._clearTimersAndListeners(e);
     this.bots.delete(id);
     this.io.emit("bot:removed", { id });
@@ -127,8 +122,6 @@ export class BotManager {
       this._wireTelemetry(e);
       this.io.emit("bot:status", { id: e.id, status: "online" });
       this.broadcastList();
-
-      // apply immediate tweaks (sprint etc)
       if (e.tweaks.autoSprint) try { bot.setControlState("sprint", true); } catch {}
       this._applyTweaksAfterSpawn(e);
     });
@@ -151,12 +144,12 @@ export class BotManager {
     bot.on("error", err => this.io.emit("bot:log", { id: e.id, line: `Error: ${err?.message || err}` }));
     bot.on("messagestr", (msg) => this.io.emit("bot:chat", { id: e.id, line: msg }));
 
-    // handle death for optional respawn (only if enabled)
+    // death => optional respawn (only when enabled)
     bot.on("death", () => {
       this.io.emit("bot:log", { id: e.id, line: "Bot died" });
       if (e.tweaks.autoRespawn) {
         setTimeout(() => {
-          try { bot.respawn(); } catch (err) { /* swallow */ }
+          try { bot.respawn(); } catch (err) {}
         }, 600);
       }
     });
@@ -241,7 +234,7 @@ export class BotManager {
     };
   }
 
-  // ---------- Commands from UI ----------
+  // ---------- UI commands ----------
 
   chat(id, text) {
     const e = this.bots.get(id); if (!e?.bot) return;
@@ -253,61 +246,31 @@ export class BotManager {
     try { e.bot.respawn(); } catch {}
   }
 
-  async swapHands(id) {
+  // equip an inventory slot into selected hand; index is 0..35 (hotbar+inventory)
+  async equipSlot(id, index, hand) {
     const e = this.bots.get(id); if (!e?.bot) return;
     const b = e.bot;
     try {
-      // prefer builtin
-      if (typeof b.swapHands === "function") {
-        await b.swapHands();
+      const slot = b.inventory.slots[9 + index] || null;
+      const dest = (hand === "off") ? "off-hand" : "hand";
+      if (!slot) {
+        // unequip
+        if (dest === "hand") await b.unequip("hand").catch(()=>{});
+        else await b.unequip("off-hand").catch(()=>{});
         return;
       }
-      // fallback best-effort: equip offhand into main hand
-      const off = b.inventory.slots[45];
-      const main = b.heldItem || null;
-      if (!off && !main) {
-        this.io.emit("bot:log", { id, line: "swapHands: nothing to swap." });
-        return;
-      }
-      if (off) {
-        try {
-          await b.equip(off, "hand");
-          this.io.emit("bot:log", { id, line: "swapHands fallback: equipped offhand into main hand (best-effort)." });
-        } catch (err) {
-          this.io.emit("bot:log", { id, line: `swapHands fallback failed: ${err?.message || err}` });
+      await b.equip(slot, dest).catch(async (err) => {
+        // some older versions use 'offhand' or 'offhand' alternative
+        if (dest === "off-hand") {
+          try { await b.equip(slot, "offhand").catch(()=>{}); } catch {}
         }
-      } else {
-        // no offhand: unequip main to hand (clear)
-        try { await b.unequip("hand"); this.io.emit("bot:log", { id, line: "swapHands fallback: unequipped main hand." }); } catch {}
-      }
-      // NOTE: full symmetric swap (put previous main into offhand) isn't safe across versions without low-level inventory ops.
+      });
     } catch (err) {
-      this.io.emit("bot:log", { id, line: `swapHands error: ${err?.message || err}` });
+      this.io.emit("bot:log", { id, line: `equipSlot error: ${err?.message || err}` });
     }
   }
 
-  async holdInventorySlot(id, index) {
-    const e = this.bots.get(id); if (!e?.bot) return;
-    const b = e.bot;
-    try {
-      const slot = b.inventory.slots[9 + index];
-      if (!slot) {
-        await b.unequip("hand").catch(()=>{});
-        return;
-      }
-      await b.equip(slot, "hand").catch(()=>{});
-    } catch {}
-  }
-
-  async unequipArmor(id, part) {
-    const e = this.bots.get(id); if (!e?.bot) return;
-    const b = e.bot;
-    try {
-      const map = { head: "head", chest: "torso", legs: "legs", feet: "feet" };
-      await b.unequip(map[part]).catch(()=>{});
-    } catch {}
-  }
-
+  // Movement / controls
   setContinuousMove(id, dir, on) {
     const e = this.bots.get(id); if (!e?.bot) return;
     const map = { W: "forward", A: "left", S: "back", D: "right" };
@@ -326,25 +289,9 @@ export class BotManager {
       e._sneakState = !e._sneakState;
       e.bot.setControlState("sneak", !!e._sneakState);
       this.io.emit("bot:log", { id, line: `Sneak ${e._sneakState ? "ON" : "OFF"}` });
-    } catch (err) { this.io.emit("bot:log", { id, line: `toggleSneak error: ${err?.message||err}` }); }
-  }
-
-  moveBlocks(id, dir, blocks = 5) {
-    // not used in UI (x-blocks removed) but kept as helper
-    const e = this.bots.get(id); if (!e?.bot) return;
-    const b = e.bot;
-    try {
-      const pos = b.entity.position.clone();
-      const yaw = b.entity.yaw;
-      const forward = new Vec3(Math.cos(yaw), 0, Math.sin(yaw));
-      const right = new Vec3(Math.cos(yaw + Math.PI/2), 0, Math.sin(yaw + Math.PI/2));
-      let target = pos.clone();
-      if (dir === "W") target = pos.plus(forward.scaled(blocks));
-      if (dir === "S") target = pos.minus(forward.scaled(blocks));
-      if (dir === "A") target = pos.minus(right.scaled(blocks));
-      if (dir === "D") target = pos.plus(right.scaled(blocks));
-      b.pathfinder.setGoal(new goals.GoalBlock(Math.round(target.x), Math.round(target.y), Math.round(target.z)), false);
-    } catch (err) { this.io.emit("bot:log", { id, line: `moveBlocks error: ${err?.message||err}` }); }
+    } catch (err) {
+      this.io.emit("bot:log", { id, line: `toggleSneak error: ${err?.message || err}` });
+    }
   }
 
   stopPath(id) {
@@ -379,21 +326,20 @@ export class BotManager {
 
   setActionMode(id, action, mode, options = {}) {
     const e = this.bots.get(id); if (!e?.bot) return;
-    // actions.js enforces attack/place/eat/mine behavior
     e.actions.setMode(action, mode, options);
   }
 
+  // tweak toggles: many side-effects
   setTweaks(id, toggles) {
     const e = this.bots.get(id); if (!e) return;
     e.tweaks = { ...e.tweaks, ...toggles };
-
     const b = e.bot;
+
     if (b) {
       if (toggles.autoSprint !== undefined) {
         try { b.setControlState("sprint", !!toggles.autoSprint); } catch {}
       }
 
-      // autoRespawn: bind/unbind listener only when toggled
       if (toggles.autoRespawn !== undefined) {
         if (toggles.autoRespawn) {
           if (!e._respListener) {
@@ -408,30 +354,35 @@ export class BotManager {
         }
       }
 
-      // autoEat
       if (toggles.autoEat !== undefined) {
         if (toggles.autoEat) this._ensureAutoEat(e); else this._clearAutoEat(e);
       }
 
-      // followPlayer
       if (toggles.followPlayer !== undefined) {
         e.tweaks.followPlayer = toggles.followPlayer || null;
         if (e.tweaks.followPlayer) this._ensureFollow(e);
         else this._clearFollow(e);
       }
 
-      // autoSleep
       if (toggles.autoSleep !== undefined) {
         e.tweaks.autoSleep = !!toggles.autoSleep;
         if (e.tweaks.autoSleep) this._ensureAutoSleep(e);
         else this._clearAutoSleep(e);
       }
+
+      if (toggles.autoMinePlace !== undefined) {
+        e.tweaks.autoMinePlace = !!toggles.autoMinePlace;
+        // when disabled, avoid pathfinding that needs mining/placing. We enforce this by
+        // only calling pathfinder.goto for beds when autoMinePlace=true. Other pathfinds continue.
+      }
+
+      // autoReconnect handled by 'end' handler spawn logic above
     }
 
     this.broadcastList();
   }
 
-  // Auto-eat: hunger <= 10 or health <= 10
+  // Auto-eat
   _ensureAutoEat(e) {
     if (!e.bot) { e.tweaks.autoEat = true; return; }
     if (e._eatTimer) return;
@@ -452,7 +403,8 @@ export class BotManager {
               await new Promise(r => setTimeout(r, 1500));
               try { b.deactivateItem(); } catch {}
             }
-          } catch {}
+            this.io.emit("bot:log", { id: e.id, line: "Auto-eat: tried to eat." });
+          } catch (err) { this.io.emit("bot:log", { id: e.id, line: `Auto-eat error: ${err?.message||err}` }); }
         }
       } catch {}
     }, 2500);
@@ -468,11 +420,11 @@ export class BotManager {
         if (!b) return;
         const name = e.tweaks.followPlayer;
         if (!name) return;
-        const pl = Object.values(b.players).find(p => (p.username === name) || (p.displayName === name));
-        const ent = pl?.entity;
+        const plEntry = Object.values(b.players).find(p => (p.username === name) || (p.displayName === name));
+        const ent = plEntry?.entity;
         if (ent) b.pathfinder.setGoal(new goals.GoalFollow(ent, 2), true);
       } catch {}
-    }, 1300);
+    }, 1200);
   }
   _clearFollow(e) {
     if (e._followTimer) { clearInterval(e._followTimer); e._followTimer = null; }
@@ -480,7 +432,7 @@ export class BotManager {
   }
 
   _ensureAutoSleep(e) {
-    // only attempt to sleep if bed is within 2 blocks (to avoid pathfinding/digging)
+    // search radius 10; only pathfind if autoMinePlace enabled; otherwise only sleep if within 2 blocks
     if (!e.bot) { e.tweaks.autoSleep = true; return; }
     if (e._sleepTimer) return;
     const b = e.bot;
@@ -492,18 +444,22 @@ export class BotManager {
         const isNight = time > 12541 && time < 23458;
         if (!isNight) return;
         const center = b.entity.position;
-        for (let dx = -5; dx <= 5; dx++) {
-          for (let dz = -5; dz <= 5; dz++) {
+        for (let dx = -10; dx <= 10; dx++) {
+          for (let dz = -10; dz <= 10; dz++) {
             try {
               const pos = center.offset(dx, 0, dz);
               const block = b.blockAt(pos);
               if (block?.name?.includes("bed")) {
-                const dist = Math.abs(dx) + Math.abs(dz);
+                const dist = Math.hypot(dx, dz);
                 if (dist <= 2) {
-                  // close enough — attempt to sleep directly (no pathfinding)
                   try { await b.sleep(block); } catch (err) { /* ignore */ }
+                } else {
+                  // bed is farther: only pathfind if autoMinePlace is enabled
+                  if (e.tweaks.autoMinePlace) {
+                    try { await b.pathfinder.goto(new goals.GoalBlock(block.position.x, block.position.y, block.position.z)); } catch {}
+                    try { await b.sleep(block); } catch {}
+                  }
                 }
-                // if bed is farther than 2, skip (avoid pathfinding/digging to it)
                 return;
               }
             } catch {}
