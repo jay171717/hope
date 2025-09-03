@@ -41,7 +41,7 @@
     </section>
 
     <section id="botPanel" class="grid2" style="display:none">
-      <!-- Status, Inventory, Movement, Actions, Misc (same markup as before) -->
+      <!-- STATUS (same fields) -->
       <div class="card" id="statusPanel">
         <div class="panel-header">
           <h2>Status</h2>
@@ -72,6 +72,7 @@
         </div>
       </div>
 
+      <!-- INVENTORY -->
       <div class="card" id="inventoryPanel">
         <h2>Inventory</h2>
         <div class="inv">
@@ -98,6 +99,7 @@
         </div>
       </div>
 
+      <!-- MOVEMENT (no X blocks) -->
       <div class="card" id="movementPanel">
         <h2>Movement / Looking</h2>
         <div class="mv-grid">
@@ -115,11 +117,9 @@
               <label>Mode:
                 <select id="mvMode">
                   <option value="press">Press to Move</option>
-                  <option value="blocks">X Blocks</option>
                   <option value="continuous">Continuous</option>
                 </select>
               </label>
-              <label>X: <input id="mvBlocks" type="number" value="5" min="1" max="100"/></label>
               <button id="mvStop">Stop</button>
               <button id="mvJump">Jump</button>
               <button id="mvSneak">Sneak</button>
@@ -163,6 +163,7 @@
         </div>
       </div>
 
+      <!-- ACTIONS -->
       <div class="card" id="actionsPanel">
         <h2>Actions</h2>
         <div class="actions">
@@ -200,16 +201,18 @@
         </div>
       </div>
 
+      <!-- MISC - ALL OFF by default -->
       <div class="card" id="miscPanel">
         <h2>Misc Tweaks</h2>
         <div class="toggles">
-          <label><input type="checkbox" id="twAutoReconnect" checked/> Auto-Reconnect</label>
+          <label><input type="checkbox" id="twAutoReconnect" /> Auto-Reconnect</label>
           <label><input type="checkbox" id="twAutoRespawn" /> Auto-Respawn</label>
           <label><input type="checkbox" id="twAutoSprint" /> Auto-Sprint</label>
-          <label><input type="checkbox" id="twAutoEat" /> Auto-Eat</label>
-          <label><input type="checkbox" id="twAutoMinePlace" /> Auto Mine/Place (use parkour only when OFF)</label>
+          <label><input type="checkbox" id="twAutoEat" /> Auto-Eat (hunger≤10 or health≤10)</label>
+          <label><input type="checkbox" id="twAutoMinePlace" /> Auto Mine/Place (off by default)</label>
           <label><input type="checkbox" id="twAutoSleep" /> Auto-Sleep (Overworld)</label>
-          <label>Follow Player: <input type="text" id="twFollowPlayer" placeholder="player name"/></label>
+          <label><input type="checkbox" id="twFollowToggle" /> Follow Player</label>
+          <label>Follow Player Name: <input type="text" id="twFollowPlayer" placeholder="player name" disabled/></label>
         </div>
       </div>
     </section>
