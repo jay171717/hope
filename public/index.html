@@ -33,14 +33,15 @@
       <div class="toolbar">
         <h2>Bots</h2>
         <div class="add-bot">
-          <input id="botName" placeholder="Bot username (required)"/>
-          <button id="addBot">Add Bot</button>
+          <input id="botName" placeholder="Bot username"/>
+          <button id="addBot">Add Bot (cracked)</button>
         </div>
       </div>
       <div id="botList" class="bot-list"></div>
     </section>
 
     <section id="botPanel" class="grid2" style="display:none">
+      <!-- Status, Inventory, Movement, Actions, Misc (same markup as before) -->
       <div class="card" id="statusPanel">
         <div class="panel-header">
           <h2>Status</h2>
@@ -166,25 +167,25 @@
         <h2>Actions</h2>
         <div class="actions">
           <div class="action" data-action="mine">
-            <h4>Mine Block</h4>
+            <h4>Mine</h4>
             <select class="mode"><option>Once</option><option>Interval</option><option>Continuous</option><option>Stop</option></select>
             <label>Interval (gt): <input class="gt" type="number" value="10"/></label>
             <button class="apply">Apply</button>
           </div>
           <div class="action" data-action="attack">
-            <h4>Attack Entity</h4>
+            <h4>Attack</h4>
             <select class="mode"><option>Once</option><option>Interval</option><option>Continuous</option><option>Stop</option></select>
             <label>Interval (gt): <input class="gt" type="number" value="10"/></label>
             <button class="apply">Apply</button>
           </div>
           <div class="action" data-action="place">
-            <h4>Place / Interact</h4>
+            <h4>Place</h4>
             <select class="mode"><option>Once</option><option>Interval</option><option>Continuous</option><option>Stop</option></select>
             <label>Interval (gt): <input class="gt" type="number" value="10"/></label>
             <button class="apply">Apply</button>
           </div>
           <div class="action" data-action="eat">
-            <h4>Eat Item</h4>
+            <h4>Eat</h4>
             <select class="mode"><option>Once</option><option>Interval</option><option>Continuous</option><option>Stop</option></select>
             <label>Interval (gt): <input class="gt" type="number" value="20"/></label>
             <button class="apply">Apply</button>
@@ -203,11 +204,12 @@
         <h2>Misc Tweaks</h2>
         <div class="toggles">
           <label><input type="checkbox" id="twAutoReconnect" checked/> Auto-Reconnect</label>
-          <label><input type="checkbox" id="twAutoRespawn" checked/> Auto-Respawn</label>
+          <label><input type="checkbox" id="twAutoRespawn" /> Auto-Respawn</label>
           <label><input type="checkbox" id="twAutoSprint" /> Auto-Sprint</label>
-          <label><input type="checkbox" id="twAutoSleep" /> Auto-Sleep (Overworld only)</label>
           <label><input type="checkbox" id="twAutoEat" /> Auto-Eat</label>
-          <label>Follow Player: <input type="text" id="twFollowPlayer" placeholder="Player name"/></label>
+          <label><input type="checkbox" id="twAutoMinePlace" /> Auto Mine/Place (use parkour only when OFF)</label>
+          <label><input type="checkbox" id="twAutoSleep" /> Auto-Sleep (Overworld)</label>
+          <label>Follow Player: <input type="text" id="twFollowPlayer" placeholder="player name"/></label>
         </div>
       </div>
     </section>
