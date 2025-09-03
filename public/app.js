@@ -5,9 +5,9 @@ const $$ = s => Array.from(document.querySelectorAll(s));
 
 function fmtPos(p) { return p ? `${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}` : "—"; }
 function dur(ms) { if (!ms) return "—"; const s = Math.floor(ms/1000); const h = Math.floor(s/3600); const m = Math.floor((s%3600)/60); const sec = s%60; return `${h}h ${m}m ${sec}s`; }
-function fmtItem(it) { if (!it) return "(empty)"; let s = `${it.name} x${it.count}`; if (it.enchants?.length) s += ` ✨${it.enchants.join(",")}`; if (it.durability !== null) s += ` (Dur ${it.durability})`; return s; }
+function fmtItem(it) { if (!it) return "(empty)"; let s = `${it.name} x${it.count}`; if (it.enchants?.length) s += ` ✨`; if (it.durability !== null) s += ` (Dur ${it.durability})`; return s; }
 
-// hide panel by default
+// hide panel until a bot is selected
 $("#botPanel").style.display = "none";
 
 socket.on("server:status", s => {
@@ -25,6 +25,7 @@ socket.on("server:status", s => {
   });
 });
 
+// BOT LIST
 socket.on("bot:list", list => {
   const cont = $("#botList"); cont.innerHTML = "";
   list.forEach(b => {
@@ -47,7 +48,6 @@ socket.on("bot:list", list => {
       currentBotId = b.id;
       $("#botPanel").style.display = "grid";
       $("#botDesc").value = b.description || "";
-      // set misc toggles to server-provided tweaks if present
       if (b.tweaks) {
         $("#twAutoReconnect").checked = !!b.tweaks.autoReconnect;
         $("#twAutoRespawn").checked = !!b.tweaks.autoRespawn;
@@ -79,6 +79,7 @@ socket.on("bot:list", list => {
   });
 });
 
+// add bot
 $("#addBot").onclick = () => {
   const name = $("#botName").value.trim();
   if (!name) return alert("Enter bot username");
@@ -104,12 +105,17 @@ socket.on("bot:telemetry", ({ id, status, inventory }) => {
     d.className = "slot";
     d.title = it ? `${it.name} x${it.count}` : "(empty)";
     d.textContent = it ? fmtItem(it) : "";
-    d.onclick = () => socket.emit("bot:holdSlot", { id: currentBotId, index: i });
+    d.onclick = () => {
+      if (!currentBotId) return;
+      const hand = $("#selectedHand").value === "off" ? "off" : "main";
+      socket.emit("bot:equipSlot", { id: currentBotId, index: i, hand });
+    };
     grid.appendChild(d);
   });
+
   $$(".equip-slot").forEach(es => {
     const k = es.dataset.armor;
-    const it = (inventory.armor||{})[k];
+    const it = (inventory.armor || {})[k];
     es.textContent = it ? fmtItem(it) : k.toUpperCase();
     es.onclick = () => socket.emit("bot:unequipArmor", { id: currentBotId, part: k });
   });
@@ -145,12 +151,6 @@ socket.on("bot:activeActions", ({ id, actions }) => {
 socket.on("bot:log", ({ id, line }) => { if (id !== currentBotId) return; const pre = $("#debugLog"); pre.textContent += line + "\n"; pre.scrollTop = pre.scrollHeight; });
 socket.on("bot:chat", ({ id, line }) => { if (id !== currentBotId) return; const pre = $("#debugLog"); pre.textContent += "[CHAT] " + line + "\n"; pre.scrollTop = pre.scrollHeight; });
 
-// swap hands (safe fallback)
-$("#swapHands").onclick = () => {
-  if (!currentBotId) return;
-  socket.emit("bot:swapHands", currentBotId);
-};
-
 // Movement
 let mvMode = "press";
 $("#mvMode").onchange = e => mvMode = e.target.value;
@@ -182,6 +182,7 @@ $("#mvStop").onclick = () => {
 $("#mvJump").onclick = () => currentBotId && socket.emit("bot:jumpOnce", currentBotId);
 $("#mvSneak").onclick = () => currentBotId && socket.emit("bot:toggleSneak", currentBotId);
 
+// pathfinding
 $("#gotoBtn").onclick = () => {
   if (!currentBotId) return;
   const x = Number($("#gotoX").value), y = Number($("#gotoY").value), z = Number($("#gotoZ").value);
@@ -189,7 +190,7 @@ $("#gotoBtn").onclick = () => {
 };
 $("#stopGotoBtn").onclick = () => currentBotId && socket.emit("bot:stopPath", currentBotId);
 
-// Look controls
+// Looking
 $$(".plus button").forEach(b => b.onclick = () => {
   if (!currentBotId) return;
   const step = Number($("#rotStep").value || "15");
@@ -200,7 +201,7 @@ $$(".plus button").forEach(b => b.onclick = () => {
 $("#setAngles").onclick = () => { if (!currentBotId) return; const yaw = Number($("#yawSet").value), pitch = Number($("#pitchSet").value); if (Number.isFinite(yaw) && Number.isFinite(pitch)) socket.emit("bot:lookAngles", { id: currentBotId, yaw, pitch }); };
 $("#lookBtn").onclick = () => { if (!currentBotId) return; const x = Number($("#lookX").value), y = Number($("#lookY").value), z = Number($("#lookZ").value); if (Number.isFinite(x)&&Number.isFinite(y)&&Number.isFinite(z)) socket.emit("bot:lookAt", { id: currentBotId, x, y, z }); };
 
-// Actions (Once / Interval / Stop only)
+// Actions
 $$(".action .apply").forEach(btn => btn.onclick = () => {
   if (!currentBotId) return;
   const root = btn.closest(".action");
@@ -211,7 +212,7 @@ $$(".action .apply").forEach(btn => btn.onclick = () => {
   socket.emit("bot:setAction", { id: currentBotId, action, mode, intervalGt: gt, dropStack });
 });
 
-// Misc toggles (defaults OFF). Follow toggle enables/disables follower.
+// Misc toggles
 $("#twFollowToggle").onchange = (ev) => {
   $("#twFollowPlayer").disabled = !ev.target.checked;
   sendTweaks();
