@@ -1,250 +1,235 @@
-const ioClient = io();
+const socket = io();
 let currentBotId = null;
-let currentHand = "hand"; // "hand" or "off-hand"
-const $ = sel => document.querySelector(sel);
-const $$ = sel => [...document.querySelectorAll(sel)];
+const $ = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
 
-function humanPos(p) { return p ? `${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}` : "—"; }
-function dur(ms) {
-  if (!ms) return "—";
-  const s = Math.floor(ms/1000);
-  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
-  return `${h}h ${m}m ${sec}s`;
-}
+function fmtPos(p) { return p ? `${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}` : "—"; }
+function dur(ms) { if (!ms) return "—"; const s = Math.floor(ms/1000); const h = Math.floor(s/3600); const m = Math.floor((s%3600)/60); const sec = s%60; return `${h}h ${m}m ${sec}s`; }
+function fmtItem(it) { if (!it) return "(empty)"; let s = `${it.name} x${it.count}`; if (it.enchants?.length) s += ` ✨`; if (it.durability !== null) s += ` (Dur ${it.durability})`; return s; }
 
-// ---------- Server status ----------
-ioClient.on("server:status", s => {
+// hide panel until a bot is selected
+$("#botPanel").style.display = "none";
+
+socket.on("server:status", s => {
   $("#svOnline").textContent = s.online ? "Online" : "Offline";
   $("#svOnline").className = "badge " + (s.online ? "on" : "off");
   $("#svAddr").textContent = `${s.host}:${s.port}`;
-  $("#svVersion").textContent = s.version ? `• ${s.version}` : "";
-  $("#svUptime").textContent = s.uptime ? `• Uptime ${s.uptime}` : "";
+  $("#svVersion").textContent = s.version || "";
+  $("#svUptime").textContent = s.uptime || "";
   $("#svMotd").textContent = s.motd || "";
   const cont = $("#svPlayers"); cont.innerHTML = "";
-  s.players.sample.forEach(p => {
-    const el = document.createElement("div");
-    el.className = "av";
-    el.innerHTML = `<img src="${p.headUrl}" alt=""/> <span>${p.name}</span>`;
+  (s.players.sample || []).forEach(p => {
+    const el = document.createElement("div"); el.className = "av";
+    el.innerHTML = `<img src="${p.headUrl}"/> <span>${p.name}</span>`;
     cont.appendChild(el);
   });
 });
 
-// ---------- Add bot ----------
-$("#addBot").onclick = () => {
-  const id = $("#botId").value.trim();
-  const name = $("#botName").value.trim();
-  if (!id || !name) return alert("Fill ID and username");
-  ioClient.emit("bot:add", { id, name });
-  $("#botId").value = ""; $("#botName").value = "";
-};
-
-ioClient.on("bot:list", list => {
+// BOT LIST
+socket.on("bot:list", list => {
   const cont = $("#botList"); cont.innerHTML = "";
   list.forEach(b => {
     const el = document.createElement("div");
     el.className = "bot";
     el.innerHTML = `
-      <img src="${b.headUrl}" alt=""/>
+      <img src="${b.headUrl}"/>
       <div>
         <div class="name">${b.name}</div>
-        <div class="status">${b.online ? "Online" : "Offline"} • ${b.id}</div>
+        <div class="status">${b.online ? "Online":"Offline"}</div>
+        <div class="desc small">${b.description||""}</div>
       </div>
       <div class="controls">
-        <label style="display:flex;align-items:center;gap:6px;">
-          <input type="checkbox" ${b.toggledConnected ? "checked":""} data-toggle="${b.id}"/> Connected
-        </label>
-        <button data-open="${b.id}">Open</button>
-        <button data-del="${b.id}" style="background:#2b1520">Delete</button>
+        <label><input type="checkbox" ${b.toggledConnected ? "checked":""} data-toggle="${b.id}"/>Connected</label>
+        <button data-remove="${b.id}">Delete</button>
       </div>
     `;
+    el.onclick = (ev) => {
+      if (ev.target.dataset.toggle || ev.target.dataset.remove) return;
+      currentBotId = b.id;
+      $("#botPanel").style.display = "grid";
+      $("#botDesc").value = b.description || "";
+      if (b.tweaks) {
+        $("#twAutoReconnect").checked = !!b.tweaks.autoReconnect;
+        $("#twAutoRespawn").checked = !!b.tweaks.autoRespawn;
+        $("#twAutoSprint").checked = !!b.tweaks.autoSprint;
+        $("#twAutoEat").checked = !!b.tweaks.autoEat;
+        $("#twAutoMinePlace").checked = !!b.tweaks.autoMinePlace;
+        $("#twAutoSleep").checked = !!b.tweaks.autoSleep;
+        $("#twFollowToggle").checked = !!b.tweaks.followPlayer;
+        $("#twFollowPlayer").value = b.tweaks.followPlayer || "";
+        $("#twFollowPlayer").disabled = !$("#twFollowToggle").checked;
+      }
+    };
     cont.appendChild(el);
   });
 
-  cont.querySelectorAll("[data-open]").forEach(btn => btn.onclick = () => openBot(btn.dataset.open));
-  cont.querySelectorAll("[data-del]").forEach(btn => btn.onclick = () => {
-    ioClient.emit("bot:remove", btn.dataset.del);
-    if (currentBotId === btn.dataset.del) {
-      currentBotId = null;
-      $("#botPanel").style.display = "none";
-    }
+  cont.querySelectorAll("[data-remove]").forEach(btn => {
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      const id = btn.dataset.remove;
+      socket.emit("bot:remove", id);
+      if (currentBotId === id) { currentBotId = null; $("#botPanel").style.display = "none"; }
+    };
   });
-  cont.querySelectorAll("[data-toggle]").forEach(cb => cb.onchange = () => ioClient.emit("bot:toggle", { id: cb.dataset.toggle, on: cb.checked }));
+  cont.querySelectorAll("[data-toggle]").forEach(cb => {
+    cb.onchange = (ev) => {
+      ev.stopPropagation();
+      socket.emit("bot:toggle", { id: ev.target.dataset.toggle, on: ev.target.checked });
+    };
+  });
 });
 
-function openBot(id) {
-  currentBotId = id;
-  $("#botPanel").style.display = "grid";
-}
+// add bot
+$("#addBot").onclick = () => {
+  const name = $("#botName").value.trim();
+  if (!name) return alert("Enter bot username");
+  socket.emit("bot:add", { name });
+  $("#botName").value = "";
+};
 
-// ---------- Status/telemetry ----------
-ioClient.on("bot:status", ({ id, status }) => {
-  if (id !== currentBotId) return;
-});
-
-ioClient.on("bot:telemetry", ({ id, status, inventory }) => {
+// telemetry & inventory
+socket.on("bot:telemetry", ({ id, status, inventory }) => {
   if (id !== currentBotId) return;
   $("#stUptime").textContent = dur(status.uptime);
-  $("#stDim").textContent = status.dim;
-  $("#stPos").textContent = humanPos(status.pos);
+  $("#stDim").textContent = status.dim || "—";
+  $("#stPos").textContent = status.pos ? fmtPos(status.pos) : "—";
   $("#stHH").textContent = `${status.health ?? "—"} / ${status.hunger ?? "—"}`;
   $("#stXP").textContent = status.xp ?? "—";
-  $("#stYawPitch").textContent = `${(status.yaw*180/Math.PI).toFixed(1)}° / ${(status.pitch*180/Math.PI).toFixed(1)}°`;
-  const fx = (status.effects || []).map(e => `${e.type} ${e.amp+1} (${Math.floor(e.dur/20)}s)`).join(", ");
-  $("#stFx").textContent = fx || "—";
-  const lookStr = status.looking?.entity ? `Entity: ${status.looking.entity}` :
-                  status.looking?.block ? `Block: ${status.looking.block.name} @ ${humanPos(status.looking.block.pos)}` : "—";
-  $("#stLooking").textContent = lookStr;
+  $("#stYawPitch").textContent = `${((status.yaw||0)*(180/Math.PI)).toFixed(1)}° / ${((status.pitch||0)*(180/Math.PI)).toFixed(1)}°`;
+  $("#stFx").textContent = (status.effects || []).map(e => `${e.type}(${e.amp})`).join(", ") || "—";
+  $("#stLooking").textContent = status.looking?.block ? `${status.looking.block.name} @ ${fmtPos(status.looking.block.pos)}` : (status.looking?.entity || "—");
 
   const grid = $("#invGrid"); grid.innerHTML = "";
-  inventory.slots.forEach((it, i) => {
-    const el = document.createElement("div");
-    el.className = "slot";
-    el.title = it ? `${it.name} x${it.count}` : "(empty)";
-    el.textContent = it ? `${it.name} x${it.count}` : "";
-    el.onclick = () => ioClient.emit("bot:holdSlot", { id: currentBotId, index: i, hand: currentHand });
-    grid.appendChild(el);
+  (inventory.slots || []).forEach((it, i) => {
+    const d = document.createElement("div");
+    d.className = "slot";
+    d.title = it ? `${it.name} x${it.count}` : "(empty)";
+    d.textContent = it ? fmtItem(it) : "";
+    d.onclick = () => {
+      if (!currentBotId) return;
+      const hand = $("#selectedHand").value === "off" ? "off" : "main";
+      socket.emit("bot:equipSlot", { id: currentBotId, index: i, hand });
+    };
+    grid.appendChild(d);
   });
 
   $$(".equip-slot").forEach(es => {
     const k = es.dataset.armor;
-    const it = inventory.armor[k];
-    es.title = it ? `${it.name}` : "(empty)";
-    es.textContent = it ? `${it.name}` : k.toUpperCase();
-    es.onclick = () => ioClient.emit("bot:unequipArmor", { id: currentBotId, part: k });
+    const it = (inventory.armor || {})[k];
+    es.textContent = it ? fmtItem(it) : k.toUpperCase();
+    es.onclick = () => socket.emit("bot:unequipArmor", { id: currentBotId, part: k });
   });
-
-  $("#mainHand").textContent = inventory.mainHand ? `${inventory.mainHand.name} x${inventory.mainHand.count}` : "";
-  $("#offHand").textContent = inventory.offHand ? `${inventory.offHand.name} x${inventory.offHand.count}` : "";
+  $("#mainHand").textContent = fmtItem(inventory.mainHand);
+  $("#offHand").textContent = fmtItem(inventory.offHand);
 });
 
-// Description
-$("#botDesc").addEventListener("change", e => {
+// description persist
+$("#botDesc").onchange = () => {
   if (!currentBotId) return;
-  ioClient.emit("bot:desc", { id: currentBotId, text: e.target.value });
-});
-ioClient.on("bot:description", ({ id, description }) => {
+  socket.emit("bot:desc", { id: currentBotId, text: $("#botDesc").value });
+};
+socket.on("bot:description", ({ id, description }) => {
   if (id === currentBotId) $("#botDesc").value = description || "";
 });
 
-// Chat/respawn
+// chat & respawn
 $("#chatSend").onclick = () => {
   if (!currentBotId) return;
   const text = $("#chatInput").value.trim();
   if (!text) return;
-  ioClient.emit("bot:chat", { id: currentBotId, text });
+  socket.emit("bot:chat", { id: currentBotId, text });
   $("#chatInput").value = "";
 };
-$("#btnRespawn").onclick = () => currentBotId && ioClient.emit("bot:respawn", currentBotId);
+$("#btnRespawn").onclick = () => currentBotId && socket.emit("bot:respawn", currentBotId);
 
-// Active actions + log
-ioClient.on("bot:activeActions", ({ id, actions }) => {
+// logs & active actions
+socket.on("bot:activeActions", ({ id, actions }) => {
   if (id !== currentBotId) return;
   const cont = $("#activeActions"); cont.innerHTML = "";
-  actions.forEach(a => {
-    const c = document.createElement("div");
-    c.className = "chip";
-    c.textContent = `${a.action} • ${a.mode}${a.intervalGt ? ` (${a.intervalGt}gt)`:""}`;
-    cont.appendChild(c);
-  });
+  (actions || []).forEach(a => { const c = document.createElement("div"); c.className = "chip"; c.textContent = `${a.action} • ${a.mode}`; cont.appendChild(c); });
 });
-ioClient.on("bot:log", ({ id, line }) => {
-  if (id !== currentBotId) return;
-  const pre = $("#debugLog");
-  pre.textContent += line + "\n";
-  pre.scrollTop = pre.scrollHeight;
-});
-ioClient.on("bot:chat", ({ id, line }) => {
-  if (id !== currentBotId) return;
-  const pre = $("#debugLog");
-  pre.textContent += "[CHAT] " + line + "\n";
-  pre.scrollTop = pre.scrollHeight;
-});
+socket.on("bot:log", ({ id, line }) => { if (id !== currentBotId) return; const pre = $("#debugLog"); pre.textContent += line + "\n"; pre.scrollTop = pre.scrollHeight; });
+socket.on("bot:chat", ({ id, line }) => { if (id !== currentBotId) return; const pre = $("#debugLog"); pre.textContent += "[CHAT] " + line + "\n"; pre.scrollTop = pre.scrollHeight; });
 
-// Movement controls
-let mvHeld = { W:false, A:false, S:false, D:false };
+// Movement
+let mvMode = "press";
+$("#mvMode").onchange = e => mvMode = e.target.value;
+let contState = { W:false, A:false, S:false, D:false };
+
 $$(".wasd button").forEach(btn => {
-  btn.onmousedown = () => handleMove(btn.dataset.mv, true);
-  btn.onmouseup = () => handleMove(btn.dataset.mv, false);
-  btn.onmouseleave = () => handleMove(btn.dataset.mv, false);
+  btn.onmousedown = () => {
+    if (!currentBotId) return;
+    const dir = btn.dataset.mv;
+    if (mvMode === "press") {
+      socket.emit("bot:moveContinuous", { id: currentBotId, dir, on: true });
+    } else {
+      contState[dir] = !contState[dir];
+      socket.emit("bot:moveContinuous", { id: currentBotId, dir, on: contState[dir] });
+    }
+  };
+  btn.onmouseup = () => {
+    if (!currentBotId) return;
+    if (mvMode === "press") socket.emit("bot:moveContinuous", { id: currentBotId, dir: btn.dataset.mv, on: false });
+  };
+  btn.onmouseleave = btn.onmouseup;
 });
-function handleMove(dir, on) {
-  if (!currentBotId) return;
-  mvHeld[dir] = on;
-  ioClient.emit("bot:moveContinuous", { id: currentBotId, dir, on });
-}
-$("#mvJump").onclick = () => currentBotId && ioClient.emit("bot:jumpOnce", currentBotId);
-$("#mvSneak").onclick = () => currentBotId && ioClient.emit("bot:toggleSneak", currentBotId);
 
-// Goto XYZ
+$("#mvStop").onclick = () => {
+  if (!currentBotId) return;
+  socket.emit("bot:stopPath", currentBotId);
+  ["W","A","S","D"].forEach(d => socket.emit("bot:moveContinuous", { id: currentBotId, dir: d, on: false }));
+};
+$("#mvJump").onclick = () => currentBotId && socket.emit("bot:jumpOnce", currentBotId);
+$("#mvSneak").onclick = () => currentBotId && socket.emit("bot:toggleSneak", currentBotId);
+
+// pathfinding
 $("#gotoBtn").onclick = () => {
   if (!currentBotId) return;
   const x = Number($("#gotoX").value), y = Number($("#gotoY").value), z = Number($("#gotoZ").value);
-  if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
-    ioClient.emit("bot:gotoXYZ", { id: currentBotId, x, y, z });
-  }
+  if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) socket.emit("bot:gotoXYZ", { id: currentBotId, x, y, z });
 };
+$("#stopGotoBtn").onclick = () => currentBotId && socket.emit("bot:stopPath", currentBotId);
 
 // Looking
-$$(".plus button").forEach(btn => {
-  btn.onclick = () => {
-    if (!currentBotId) return;
-    const step = Number($("#rotStep").value||"15");
-    const map = { up:[0,-step], down:[0,step], left:[-step,0], right:[step,0] };
-    const [dyaw, dpitch] = map[btn.dataset.rot];
-    ioClient.emit("bot:rotateStep", { id: currentBotId, dyaw, dpitch });
-  };
+$$(".plus button").forEach(b => b.onclick = () => {
+  if (!currentBotId) return;
+  const step = Number($("#rotStep").value || "15");
+  const map = { up:[0,-step], down:[0,step], left:[-step,0], right:[step,0] };
+  const [dyaw, dpitch] = map[b.dataset.rot];
+  socket.emit("bot:rotateStep", { id: currentBotId, dyaw, dpitch });
 });
-$("#setAngles").onclick = () => {
-  if (!currentBotId) return;
-  const yaw = Number($("#yawSet").value), pitch = Number($("#pitchSet").value);
-  if (Number.isFinite(yaw) && Number.isFinite(pitch))
-    ioClient.emit("bot:lookAngles", { id: currentBotId, yaw, pitch });
-};
-$("#lookBtn").onclick = () => {
-  if (!currentBotId) return;
-  const x = Number($("#lookX").value), y = Number($("#lookY").value), z = Number($("#lookZ").value);
-  if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z))
-    ioClient.emit("bot:lookAt", { id: currentBotId, x, y, z });
-};
+$("#setAngles").onclick = () => { if (!currentBotId) return; const yaw = Number($("#yawSet").value), pitch = Number($("#pitchSet").value); if (Number.isFinite(yaw) && Number.isFinite(pitch)) socket.emit("bot:lookAngles", { id: currentBotId, yaw, pitch }); };
+$("#lookBtn").onclick = () => { if (!currentBotId) return; const x = Number($("#lookX").value), y = Number($("#lookY").value), z = Number($("#lookZ").value); if (Number.isFinite(x)&&Number.isFinite(y)&&Number.isFinite(z)) socket.emit("bot:lookAt", { id: currentBotId, x, y, z }); };
 
-// Actions panel
-$$(".action .apply").forEach(btn => {
-  btn.onclick = () => {
-    if (!currentBotId) return;
-    const root = btn.closest(".action");
-    const action = root.dataset.action;
-    const mode = root.querySelector(".mode").value;
-    const gt = Number(root.querySelector(".gt").value||"10");
-    const dropStack = root.querySelector(".dropStack")?.checked || false;
-    ioClient.emit("bot:setAction", { id: currentBotId, action, mode, intervalGt: gt, dropStack });
-  };
+// Actions
+$$(".action .apply").forEach(btn => btn.onclick = () => {
+  if (!currentBotId) return;
+  const root = btn.closest(".action");
+  const action = root.dataset.action;
+  const mode = root.querySelector(".mode").value;
+  const gt = Number(root.querySelector(".gt").value || "10");
+  const dropStack = !!root.querySelector(".dropStack")?.checked;
+  socket.emit("bot:setAction", { id: currentBotId, action, mode, intervalGt: gt, dropStack });
 });
 
-// Tweaks
+// Misc toggles
+$("#twFollowToggle").onchange = (ev) => {
+  $("#twFollowPlayer").disabled = !ev.target.checked;
+  sendTweaks();
+};
 function sendTweaks() {
   if (!currentBotId) return;
-  ioClient.emit("bot:setTweaks", {
-    id: currentBotId,
-    toggles: {
-      autoRespawn: $("#twAutoRespawn").checked,
-      autoSprint: $("#twAutoSprint").checked,
-      autoReconnect: $("#twAutoReconnect").checked,
-      autoSleep: $("#twAutoSleep").checked,
-      autoEat: $("#twAutoEat").checked,
-      followPlayer: $("#twFollowPlayer").value.trim() || null,
-      autoMinePlace: $("#twAutoMinePlace").checked
-    }
-  });
+  const toggles = {
+    autoReconnect: !!$("#twAutoReconnect").checked,
+    autoRespawn: !!$("#twAutoRespawn").checked,
+    autoSprint: !!$("#twAutoSprint").checked,
+    autoEat: !!$("#twAutoEat").checked,
+    autoMinePlace: !!$("#twAutoMinePlace").checked,
+    autoSleep: !!$("#twAutoSleep").checked,
+    followPlayer: $("#twFollowToggle").checked ? ($("#twFollowPlayer").value.trim() || null) : null
+  };
+  socket.emit("bot:setTweaks", { id: currentBotId, toggles });
 }
-$("#twAutoRespawn").onchange = sendTweaks;
-$("#twAutoSprint").onchange = sendTweaks;
-$("#twAutoReconnect").onchange = sendTweaks;
-$("#twAutoSleep").onchange = sendTweaks;
-$("#twAutoEat").onchange = sendTweaks;
-$("#twAutoMinePlace").onchange = sendTweaks;
-$("#twFollowPlayer").onchange = sendTweaks;
-
-// Hand selection dropdown
-$("#handSelect").onchange = e => {
-  currentHand = e.target.value;
-};
+["#twAutoReconnect","#twAutoRespawn","#twAutoSprint","#twAutoEat","#twAutoMinePlace","#twAutoSleep","#twFollowPlayer"].forEach(sel => {
+  const el = $(sel); if (el) el.onchange = sendTweaks;
+});
