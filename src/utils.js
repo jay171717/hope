@@ -9,4 +9,5 @@ export function formatDuration(ms) {
   return `${h}h ${m}m ${sec}s`;
 }
 
-export const withDefault = (v, d="—") => (v === undefined || v === null ? d : v);
+export const withDefault = (v, d = "—") =>
+  v === undefined || v === null ? d : v;
