@@ -50,6 +50,7 @@ export class BotManager {
       toggledConnected: true,
       description: "",
       tweaks: {
+        // OFF by default
         autoReconnect: false,
         autoRespawn: false,
         autoSprint: false,
@@ -64,8 +65,8 @@ export class BotManager {
       _eatTimer: null,
       _followTimer: null,
       _sleepTimer: null,
-      _respListener: null,
-      _sneakState: false
+      _sneakState: false,
+      _movements: null
     };
     this.bots.set(useId, e);
     this._spawn(e);
@@ -118,12 +119,28 @@ export class BotManager {
     bot.once("spawn", () => {
       e.lastSeen = Date.now();
       try { e.mcData = mcdataFactory(bot.version); } catch { e.mcData = null; }
-      try { bot.pathfinder.setMovements(new Movements(bot, e.mcData)); } catch {}
+
+      // Apply Movements honoring "autoMinePlace"
+      this._applyMovements(e);
+
       this._wireTelemetry(e);
       this.io.emit("bot:status", { id: e.id, status: "online" });
       this.broadcastList();
+
       if (e.tweaks.autoSprint) try { bot.setControlState("sprint", true); } catch {}
-      this._applyTweaksAfterSpawn(e);
+
+      // Apply enabled toggles (but NOT autoRespawn – handled centrally below)
+      if (e.tweaks.autoEat) this._ensureAutoEat(e);
+      if (e.tweaks.followPlayer) this._ensureFollow(e);
+      if (e.tweaks.autoSleep) this._ensureAutoSleep(e);
+    });
+
+    // Centralized respawn: OFF by default; only acts when autoRespawn true
+    bot.on("death", () => {
+      this.io.emit("bot:log", { id: e.id, line: "Bot died" });
+      if (e.tweaks.autoRespawn) {
+        setTimeout(() => { try { bot.respawn(); } catch {} }, 600);
+      }
     });
 
     bot.on("end", (reason) => {
@@ -143,28 +160,22 @@ export class BotManager {
     bot.on("kicked", reason => this.io.emit("bot:log", { id: e.id, line: `Kicked: ${reason}` }));
     bot.on("error", err => this.io.emit("bot:log", { id: e.id, line: `Error: ${err?.message || err}` }));
     bot.on("messagestr", (msg) => this.io.emit("bot:chat", { id: e.id, line: msg }));
-
-    // death => optional respawn (only when enabled)
-    bot.on("death", () => {
-      this.io.emit("bot:log", { id: e.id, line: "Bot died" });
-      if (e.tweaks.autoRespawn) {
-        setTimeout(() => {
-          try { bot.respawn(); } catch (err) {}
-        }, 600);
-      }
-    });
   }
 
-  _applyTweaksAfterSpawn(e) {
-    const b = e.bot;
-    if (!b) return;
-    if (e.tweaks.autoRespawn && !e._respListener) {
-      e._respListener = () => setTimeout(() => { try { b.respawn(); } catch {} }, 500);
-      try { b.on("death", e._respListener); } catch {}
-    }
-    if (e.tweaks.autoEat) this._ensureAutoEat(e);
-    if (e.tweaks.followPlayer) this._ensureFollow(e);
-    if (e.tweaks.autoSleep) this._ensureAutoSleep(e);
+  _applyMovements(e) {
+    const b = e.bot; if (!b) return;
+    try {
+      const mov = new Movements(b, e.mcData || undefined);
+      // Respect "Auto Mine/Place"
+      const allow = !!e.tweaks.autoMinePlace;
+      mov.canDig = allow;
+      // discourage/disable placing scaffolding by giving no scaffolding blocks
+      mov.scaffoldingBlocks = [];
+      // Make placing extremely costly unless allowed (older versions may ignore, but canDig=false blocks most)
+      if (!allow) mov.placeCost = Infinity;
+      e._movements = mov;
+      b.pathfinder.setMovements(mov);
+    } catch {}
   }
 
   _wireTelemetry(e) {
@@ -259,8 +270,7 @@ export class BotManager {
         else await b.unequip("off-hand").catch(()=>{});
         return;
       }
-      await b.equip(slot, dest).catch(async (err) => {
-        // some older versions use 'offhand' or 'offhand' alternative
+      await b.equip(slot, dest).catch(async () => {
         if (dest === "off-hand") {
           try { await b.equip(slot, "offhand").catch(()=>{}); } catch {}
         }
@@ -301,7 +311,10 @@ export class BotManager {
 
   gotoXYZ(id, x, y, z) {
     const e = this.bots.get(id); if (!e?.bot) return;
-    try { e.bot.pathfinder.setGoal(new goals.GoalBlock(Math.round(x), Math.round(y), Math.round(z)), true); } catch {}
+    try {
+      if (e._movements) e.bot.pathfinder.setMovements(e._movements);
+      e.bot.pathfinder.setGoal(new goals.GoalBlock(Math.round(x), Math.round(y), Math.round(z)), true);
+    } catch {}
   }
 
   rotateStep(id, dYawDeg = 0, dPitchDeg = 0) {
@@ -340,19 +353,7 @@ export class BotManager {
         try { b.setControlState("sprint", !!toggles.autoSprint); } catch {}
       }
 
-      if (toggles.autoRespawn !== undefined) {
-        if (toggles.autoRespawn) {
-          if (!e._respListener) {
-            e._respListener = () => setTimeout(()=>{ try { b.respawn(); } catch {} }, 500);
-            try { b.on("death", e._respListener); } catch {}
-          }
-        } else {
-          if (e._respListener) {
-            try { b.removeListener("death", e._respListener); } catch {}
-            e._respListener = null;
-          }
-        }
-      }
+      // Auto-Respawn logic is centralized in 'death' event; nothing to attach/detach here.
 
       if (toggles.autoEat !== undefined) {
         if (toggles.autoEat) this._ensureAutoEat(e); else this._clearAutoEat(e);
@@ -372,17 +373,31 @@ export class BotManager {
 
       if (toggles.autoMinePlace !== undefined) {
         e.tweaks.autoMinePlace = !!toggles.autoMinePlace;
-        // when disabled, avoid pathfinding that needs mining/placing. We enforce this by
-        // only calling pathfinder.goto for beds when autoMinePlace=true. Other pathfinds continue.
+        this._applyMovements(e); // re-apply movements to reflect canDig/placeCost
       }
-
-      // autoReconnect handled by 'end' handler spawn logic above
+      // autoReconnect handled by 'end' handler.
     }
 
     this.broadcastList();
   }
 
-  // Auto-eat
+  // --------- Auto-eat ----------
+  _findEdibleItem(bot) {
+    const namesByPref = [
+      // higher-nutrition cooked foods first
+      "cooked_beef","steak","cooked_porkchop","cooked_mutton","cooked_chicken","cooked_cod","cooked_salmon",
+      "rabbit_stew","mushroom_stew","beetroot_soup","baked_potato","pumpkin_pie",
+      "bread","apple","carrot","beetroot","potato","melon_slice","dried_kelp","cookie","chorus_fruit"
+    ];
+    const items = bot.inventory.items();
+    for (const pref of namesByPref) {
+      const it = items.find(i => i.name === pref);
+      if (it) return it;
+    }
+    // fallback: anything with common food substrings
+    return items.find(i => /(beef|pork|mutton|chicken|cod|salmon|bread|apple|carrot|beet|potato|melon|cookie|stew|soup|pie|kelp|chorus)/i.test(i.name));
+  }
+
   _ensureAutoEat(e) {
     if (!e.bot) { e.tweaks.autoEat = true; return; }
     if (e._eatTimer) return;
@@ -390,27 +405,28 @@ export class BotManager {
     e._eatTimer = setInterval(async () => {
       try {
         if (!b) return;
-        const need = (b.food !== undefined && b.food <= 10) || (b.health !== undefined && b.health <= 10);
-        if (!need) return;
-        const edible = b.inventory.items().find(it => /apple|bread|porkchop|beef|chicken|stew|rabbit|melon|cookie|potato/i.test(it.name));
-        if (edible) {
-          await b.equip(edible, "hand").catch(()=>{});
-          try {
-            if (typeof b.consume === "function") {
-              await b.consume().catch(()=>{});
-            } else {
-              b.activateItem(false);
-              await new Promise(r => setTimeout(r, 1500));
-              try { b.deactivateItem(); } catch {}
-            }
-            this.io.emit("bot:log", { id: e.id, line: "Auto-eat: tried to eat." });
-          } catch (err) { this.io.emit("bot:log", { id: e.id, line: `Auto-eat error: ${err?.message||err}` }); }
+        const lowFood = (typeof b.food === "number") && b.food <= 10;
+        const lowHp = (typeof b.health === "number") && b.health <= 10;
+        if (!lowFood && !lowHp) return;
+
+        const edible = this._findEdibleItem(b);
+        if (!edible) return;
+
+        await b.equip(edible, "hand").catch(()=>{});
+        if (typeof b.consume === "function") {
+          await b.consume().catch(()=>{});
+        } else {
+          b.activateItem(false);
+          await new Promise(r => setTimeout(r, 1600));
+          try { b.deactivateItem(); } catch {}
         }
+        this.io.emit("bot:log", { id: e.id, line: "Auto-eat: consumed food." });
       } catch {}
-    }, 2500);
+    }, 2000);
   }
   _clearAutoEat(e) { if (e._eatTimer) { clearInterval(e._eatTimer); e._eatTimer = null; } }
 
+  // --------- Follow player (respects movements) ----------
   _ensureFollow(e) {
     if (!e.bot) return;
     if (e._followTimer) return;
@@ -420,9 +436,12 @@ export class BotManager {
         if (!b) return;
         const name = e.tweaks.followPlayer;
         if (!name) return;
-        const plEntry = Object.values(b.players).find(p => (p.username === name) || (p.displayName === name));
+        const plEntry = Object.values(b.players).find(p => (p?.username === name) || (p?.displayName === name));
         const ent = plEntry?.entity;
-        if (ent) b.pathfinder.setGoal(new goals.GoalFollow(ent, 2), true);
+        if (ent) {
+          if (e._movements) b.pathfinder.setMovements(e._movements);
+          b.pathfinder.setGoal(new goals.GoalFollow(ent, 2), true);
+        }
       } catch {}
     }, 1200);
   }
@@ -431,8 +450,8 @@ export class BotManager {
     if (e.bot) try { e.bot.pathfinder.setGoal(null); } catch {}
   }
 
+  // --------- Auto-sleep (radius 10; pathfind only if Auto Mine/Place enabled) ----------
   _ensureAutoSleep(e) {
-    // search radius 10; only pathfind if autoMinePlace enabled; otherwise only sleep if within 2 blocks
     if (!e.bot) { e.tweaks.autoSleep = true; return; }
     if (e._sleepTimer) return;
     const b = e.bot;
@@ -443,26 +462,28 @@ export class BotManager {
         const time = b.time?.timeOfDay || 0;
         const isNight = time > 12541 && time < 23458;
         if (!isNight) return;
+
         const center = b.entity.position;
         for (let dx = -10; dx <= 10; dx++) {
           for (let dz = -10; dz <= 10; dz++) {
-            try {
-              const pos = center.offset(dx, 0, dz);
-              const block = b.blockAt(pos);
-              if (block?.name?.includes("bed")) {
-                const dist = Math.hypot(dx, dz);
-                if (dist <= 2) {
-                  try { await b.sleep(block); } catch (err) { /* ignore */ }
-                } else {
-                  // bed is farther: only pathfind if autoMinePlace is enabled
-                  if (e.tweaks.autoMinePlace) {
-                    try { await b.pathfinder.goto(new goals.GoalBlock(block.position.x, block.position.y, block.position.z)); } catch {}
-                    try { await b.sleep(block); } catch {}
-                  }
+            const pos = center.offset(dx, 0, dz);
+            let block = null;
+            try { block = b.blockAt(pos); } catch {}
+            if (block?.name?.includes("bed")) {
+              const dist = Math.hypot(dx, dz);
+              if (dist <= 2) {
+                try { await b.sleep(block); } catch {}
+              } else {
+                if (e.tweaks.autoMinePlace) {
+                  try {
+                    if (e._movements) b.pathfinder.setMovements(e._movements);
+                    await b.pathfinder.goto(new goals.GoalBlock(block.position.x, block.position.y, block.position.z));
+                    await b.sleep(block);
+                  } catch {}
                 }
-                return;
               }
-            } catch {}
+              return;
+            }
           }
         }
       } catch {}
@@ -475,7 +496,5 @@ export class BotManager {
     if (e._eatTimer) { clearInterval(e._eatTimer); e._eatTimer = null; }
     if (e._followTimer) { clearInterval(e._followTimer); e._followTimer = null; }
     if (e._sleepTimer) { clearInterval(e._sleepTimer); e._sleepTimer = null; }
-    if (e._respListener && e.bot) { try { e.bot.removeListener("death", e._respListener); } catch {} }
-    e._respListener = null;
   }
 }
