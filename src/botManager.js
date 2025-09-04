@@ -235,6 +235,7 @@ export class BotManager {
   }
 
   // ---------- UI commands ----------
+
   chat(id, text) {
     const e = this.bots.get(id); if (!e?.bot) return;
     try { e.bot.chat(text); } catch {}
@@ -266,6 +267,7 @@ export class BotManager {
     }
   }
 
+  // Movement / controls
   setContinuousMove(id, dir, on) {
     const e = this.bots.get(id); if (!e?.bot) return;
     const map = { W: "forward", A: "left", S: "back", D: "right" };
@@ -280,12 +282,13 @@ export class BotManager {
 
   toggleSneak(id) {
     const e = this.bots.get(id); if (!e?.bot) return;
+    const b = e.bot;
+    e._sneakState = !e._sneakState;
     try {
-      e._sneakState = !e._sneakState;
-      e.bot.setControlState("sneak", !!e._sneakState);
+      b.setControlState("sneak", e._sneakState);
       this.io.emit("bot:log", { id, line: `Sneak ${e._sneakState ? "ON" : "OFF"}` });
     } catch (err) {
-      this.io.emit("bot:log", { id, line: `toggleSneak error: ${err?.message || err}` });
+      this.io.emit("bot:log", { id, line: `Sneak error: ${err.message}` });
     }
   }
 
@@ -324,6 +327,7 @@ export class BotManager {
     e.actions.setMode(action, mode, options);
   }
 
+  // tweak toggles
   setTweaks(id, toggles) {
     const e = this.bots.get(id); if (!e) return;
     e.tweaks = { ...e.tweaks, ...toggles };
@@ -422,56 +426,35 @@ export class BotManager {
   }
 
   _ensureAutoSleep(e) {
-    if (!e.bot) { e.tweaks.autoSleep = true; return; }
+    if (!e.bot) return;
     if (e._sleepTimer) return;
     const b = e.bot;
     e._sleepTimer = setInterval(async () => {
       try {
-        if (!b) return;
-        if (!/overworld/i.test(b.game?.dimension || "")) return;
+        const isNight = b.time.timeOfDay > 13000 && b.time.timeOfDay < 23000;
+        if (!isNight || b.isSleeping) return;
 
-        const time = b.time?.timeOfDay || 0;
-        const isNight = time > 12541 && time < 23458;
-        if (!isNight) return;
+        const beds = b.findBlocks({
+          matching: (block) => block.name.includes("bed"),
+          maxDistance: 10,
+          count: 5
+        });
 
-        console.log(`[Auto-Sleep] Checking for bed. autoMinePlace=${e.tweaks.autoMinePlace}`);
+        if (!beds.length) return;
 
-        const center = b.entity.position;
-        let foundBed = null;
+        const bedPos = beds[0];
+        const goal = new goals.GoalGetToBlock(bedPos.x, bedPos.y, bedPos.z);
+        await b.pathfinder.goto(goal);
 
-        for (let dx = -10; dx <= 10; dx++) {
-          for (let dz = -10; dz <= 10; dz++) {
-            try {
-              const pos = center.offset(dx, 0, dz);
-              const block = b.blockAt(pos);
-              if (block?.name?.includes("bed")) {
-                foundBed = block;
-                const dist = Math.hypot(dx, dz);
-                if (dist <= 2) {
-                  console.log(`[Auto-Sleep] Bed within 2 blocks. Sleeping now.`);
-                  await b.sleep(block).catch(err => console.log(`[Auto-Sleep] Sleep failed: ${err.message}`));
-                } else if (e.tweaks.autoMinePlace) {
-                  console.log(`[Auto-Sleep] Bed at distance ${dist.toFixed(1)}. Pathing...`);
-                  await b.pathfinder.goto(new goals.GoalBlock(block.position.x, block.position.y, block.position.z));
-                  console.log(`[Auto-Sleep] Reached bed. Attempting sleep...`);
-                  await b.sleep(block).catch(err => console.log(`[Auto-Sleep] Sleep at bed failed: ${err.message}`));
-                } else {
-                  console.log(`[Auto-Sleep] Found bed but autoMinePlace=false, not pathing.`);
-                }
-                return;
-              }
-            } catch {}
-          }
+        const bedBlock = b.blockAt(bedPos);
+        if (bedBlock) {
+          await b.sleep(bedBlock);
+          this.io.emit("bot:log", { id: e.id, line: "Auto-Sleep: sleeping" });
         }
-
-        if (!foundBed) {
-          console.log(`[Auto-Sleep] No bed found within 10 block radius.`);
-        }
-
       } catch (err) {
-        console.log(`[Auto-Sleep] Error: ${err.message}`);
+        this.io.emit("bot:log", { id: e.id, line: `Auto-Sleep error: ${err.message}` });
       }
-    }, 5000);
+    }, 10000);
   }
   _clearAutoSleep(e) { if (e._sleepTimer) { clearInterval(e._sleepTimer); e._sleepTimer = null; } }
 
@@ -482,5 +465,9 @@ export class BotManager {
     if (e._sleepTimer) { clearInterval(e._sleepTimer); e._sleepTimer = null; }
     if (e._respListener && e.bot) { try { e.bot.removeListener("death", e._respListener); } catch {} }
     e._respListener = null;
+  }
+
+  _log(id, line) {
+    this.io.emit("bot:log", { id, line });
   }
 }
