@@ -4,8 +4,8 @@ import { Vec3 } from "vec3";
  * Actions (no Continuous): mine, attack, place, eat, drop
  * Modes: Once, Interval, Stop
  *
- * - Attack uses entityAtCursor (what bot is looking at)
- * - Place uses placeBlock if available and restores look
+ * - Attack ONLY hits entity at cursor (what bot is actually looking at)
+ * - Place uses placeBlock if available and restores look angles afterward
  * - Eat uses bot.consume() if available
  * - Drop tries to re-equip same item if possible after dropping
  */
@@ -74,24 +74,25 @@ export class ActionController {
     try {
       switch (key) {
         case "mine": {
+          // Mine only block at cursor so the bot doesn't auto-rotate.
           const blk = (() => { try { return b.blockAtCursor(6); } catch { return null; } })();
           if (blk) await b.dig(blk).catch(()=>{});
           break;
         }
         case "attack": {
+          // STRICT: only attack the entity the crosshair is on.
           let target = null;
-          try { target = b.entityAtCursor ? b.entityAtCursor(6) : null; } catch {}
-          if (!target) {
-            try { const ne = b.nearestEntity ? b.nearestEntity() : null; if (ne) target = ne; } catch {}
-          }
+          try { target = b.entityAtCursor ? b.entityAtCursor(4.5) : null; } catch {}
           if (target) await b.attack(target).catch(()=>{});
           break;
         }
         case "place": {
+          // Place against block at cursor, no look changes.
           const blk = (() => { try { return b.blockAtCursor(6); } catch { return null; } })();
           if (blk && b.heldItem) {
             try {
               if (typeof b.placeBlock === "function") {
+                // Use the top face by default; this doesn't rotate the bot.
                 await b.placeBlock(blk, new Vec3(0, 1, 0)).catch(()=>{});
               } else {
                 b.activateItem(false);
@@ -107,7 +108,7 @@ export class ActionController {
               await b.consume().catch(()=>{});
             } else {
               b.activateItem(false);
-              await new Promise(r => setTimeout(r, 1500));
+              await new Promise(r => setTimeout(r, 1600));
               try { b.deactivateItem(); } catch {}
             }
           }
@@ -120,7 +121,7 @@ export class ActionController {
               if (state.dropStack && typeof b.tossStack === "function") await b.tossStack(b.heldItem).catch(()=>{});
               else await b.toss(b.heldItem.type, null, 1).catch(()=>{});
             } catch {}
-            // try to re-equip same type if available to preserve mainhand
+            // Re-equip an item of the same name (if still available) to avoid switching to empty hand.
             try {
               const found = b.inventory.items().find(it => it.name === prevName);
               if (found) await b.equip(found, "hand").catch(()=>{});
