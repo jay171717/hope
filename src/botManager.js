@@ -166,16 +166,18 @@ export class BotManager {
     const b = e.bot; if (!b) return;
     try {
       const mov = new Movements(b, e.mcData || undefined);
-      // Respect "Auto Mine/Place"
+      // Respect "Auto Mine/Place": allow digging only when enabled
       const allow = !!e.tweaks.autoMinePlace;
-      mov.canDig = allow;
-      // discourage/disable placing scaffolding by giving no scaffolding blocks
-      mov.scaffoldingBlocks = [];
-      // Make placing extremely costly unless allowed (older versions may ignore, but canDig=false blocks most)
-      if (!allow) mov.placeCost = Infinity;
+      // Movements has different internals between versions; attempt best-effort flags:
+      if ("canDig" in mov) mov.canDig = allow;
+      if ("placeCost" in mov) mov.placeCost = allow ? 1 : Infinity;
+      // some versions allow scaffoldingBlocks or similar; try to clear if not allowed:
+      try { mov.scaffoldingBlocks = allow ? mov.scaffoldingBlocks || [] : []; } catch {}
       e._movements = mov;
       b.pathfinder.setMovements(mov);
-    } catch {}
+    } catch (err) {
+      // ignore movement apply errors (compatibility)
+    }
   }
 
   _wireTelemetry(e) {
@@ -296,9 +298,12 @@ export class BotManager {
   toggleSneak(id) {
     const e = this.bots.get(id); if (!e?.bot) return;
     try {
-      e._sneakState = !e._sneakState;
-      e.bot.setControlState("sneak", !!e._sneakState);
-      this.io.emit("bot:log", { id, line: `Sneak ${e._sneakState ? "ON" : "OFF"}` });
+      // use bot.getControlState to reflect actual state
+      const curr = e.bot.getControlState ? e.bot.getControlState("sneak") : !!e._sneakState;
+      const nxt = !curr;
+      e._sneakState = !!nxt;
+      e.bot.setControlState("sneak", !!nxt);
+      this.io.emit("bot:log", { id, line: `Sneak ${nxt ? "ON" : "OFF"}` });
     } catch (err) {
       this.io.emit("bot:log", { id, line: `toggleSneak error: ${err?.message || err}` });
     }
@@ -353,8 +358,6 @@ export class BotManager {
         try { b.setControlState("sprint", !!toggles.autoSprint); } catch {}
       }
 
-      // Auto-Respawn logic is centralized in 'death' event; nothing to attach/detach here.
-
       if (toggles.autoEat !== undefined) {
         if (toggles.autoEat) this._ensureAutoEat(e); else this._clearAutoEat(e);
       }
@@ -384,7 +387,6 @@ export class BotManager {
   // --------- Auto-eat ----------
   _findEdibleItem(bot) {
     const namesByPref = [
-      // higher-nutrition cooked foods first
       "cooked_beef","steak","cooked_porkchop","cooked_mutton","cooked_chicken","cooked_cod","cooked_salmon",
       "rabbit_stew","mushroom_stew","beetroot_soup","baked_potato","pumpkin_pie",
       "bread","apple","carrot","beetroot","potato","melon_slice","dried_kelp","cookie","chorus_fruit"
@@ -394,7 +396,6 @@ export class BotManager {
       const it = items.find(i => i.name === pref);
       if (it) return it;
     }
-    // fallback: anything with common food substrings
     return items.find(i => /(beef|pork|mutton|chicken|cod|salmon|bread|apple|carrot|beet|potato|melon|cookie|stew|soup|pie|kelp|chorus)/i.test(i.name));
   }
 
@@ -450,7 +451,7 @@ export class BotManager {
     if (e.bot) try { e.bot.pathfinder.setGoal(null); } catch {}
   }
 
-  // --------- Auto-sleep (radius 10; pathfind only if Auto Mine/Place enabled) ----------
+  // --------- Auto-sleep (radius 10; pathfind only if autoMinePlace enabled or path possible)
   _ensureAutoSleep(e) {
     if (!e.bot) { e.tweaks.autoSleep = true; return; }
     if (e._sleepTimer) return;
@@ -459,32 +460,67 @@ export class BotManager {
       try {
         if (!b) return;
         if (!/overworld/i.test(b.game?.dimension || "")) return;
-        const time = b.time?.timeOfDay || 0;
+        const time = b.time?.timeOfDay ?? 0;
         const isNight = time > 12541 && time < 23458;
         if (!isNight) return;
 
         const center = b.entity.position;
-        for (let dx = -10; dx <= 10; dx++) {
-          for (let dz = -10; dz <= 10; dz++) {
-            const pos = center.offset(dx, 0, dz);
-            let block = null;
-            try { block = b.blockAt(pos); } catch {}
-            if (block?.name?.includes("bed")) {
-              const dist = Math.hypot(dx, dz);
-              if (dist <= 2) {
-                try { await b.sleep(block); } catch {}
-              } else {
-                if (e.tweaks.autoMinePlace) {
-                  try {
-                    if (e._movements) b.pathfinder.setMovements(e._movements);
-                    await b.pathfinder.goto(new goals.GoalBlock(block.position.x, block.position.y, block.position.z));
-                    await b.sleep(block);
-                  } catch {}
+        // Find nearest bed within radius 10 (search up/down a couple of blocks)
+        let nearest = null;
+        let bestDist2 = Infinity;
+        const R = 10;
+        for (let dx = -R; dx <= R; dx++) {
+          for (let dz = -R; dz <= R; dz++) {
+            for (let dy = -2; dy <= 2; dy++) {
+              try {
+                const pos = center.offset(dx, dy, dz);
+                const block = b.blockAt(pos);
+                if (block?.name?.includes("bed")) {
+                  const dist2 = dx*dx + dy*dy + dz*dz;
+                  if (dist2 < bestDist2) {
+                    bestDist2 = dist2;
+                    nearest = block;
+                  }
                 }
-              }
-              return;
+              } catch {}
             }
           }
+        }
+
+        if (!nearest) return;
+        const horizDist = Math.hypot(center.x - nearest.position.x, center.z - nearest.position.z);
+
+        // If bed is very close, try to sleep directly
+        if (horizDist <= 2) {
+          try { await b.sleep(nearest).catch(()=>{}); } catch {}
+          return;
+        }
+
+        // Bed is farther (but within 10): attempt to pathfind to it WITHOUT digging first
+        const goal = new goals.GoalBlock(nearest.position.x, nearest.position.y, nearest.position.z);
+        let reached = false;
+        try {
+          // ensure movements reflect current autoMinePlace setting (no digging by default)
+          if (e._movements) b.pathfinder.setMovements(e._movements);
+          await b.pathfinder.goto(goal);
+          reached = true;
+        } catch (err) {
+          // path failed
+          reached = false;
+        }
+
+        if (!reached && e.tweaks.autoMinePlace) {
+          // Allow digging/placing and retry once
+          try {
+            // re-apply movements (mov.canDig should be true if autoMinePlace)
+            this._applyMovements(e);
+            await b.pathfinder.goto(goal);
+            reached = true;
+          } catch {}
+        }
+
+        if (reached) {
+          try { await b.sleep(nearest).catch(()=>{}); } catch {}
         }
       } catch {}
     }, 5000);
