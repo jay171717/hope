@@ -206,7 +206,6 @@
             <button class="apply">Apply</button>
           </div>
 
-          <!-- NEW: Jump action -->
           <div class="action" data-action="jump">
             <h4>Jump</h4>
             <select class="mode"><option>Once</option><option>Interval</option><option>Stop</option></select>
@@ -218,14 +217,16 @@
 
       <div class="card" id="miscPanel">
         <h2>Misc Tweaks</h2>
-        <div class="toggles">
+        <div class="toggles" style="display: flex; flex-direction: column; gap: 8px;">
           <label><input type="checkbox" id="twAutoReconnect" /> Auto-Reconnect</label>
           <label><input type="checkbox" id="twAutoRespawn" /> Auto-Respawn</label>
           <label><input type="checkbox" id="twAutoSprint" /> Auto-Sprint</label>
-          <label><input type="checkbox" id="twAutoEat" /> Auto-Eat (hunger≤10 or health≤10)</label>
-          <label><input type="checkbox" id="twAutoMinePlace" /> Auto Mine/Place (allow pathfind that may mine/place)</label>
+          <label><input type="checkbox" id="twAutoEat" /> Auto-Eat (hunger≤10 / hp≤10)</label>
+          <label><input type="checkbox" id="twAutoMinePlace" /> Auto Mine/Place</label>
           <label><input type="checkbox" id="twAutoSleep" /> Auto-Sleep (Overworld)</label>
-          <label><input type="checkbox" id="twFollowToggle" /> Follow Player</label>
+          <label style="display: flex; align-items: center;">
+            <input type="checkbox" id="twFollowToggle" style="margin-right:4px;" /> Follow Player
+          </label>
           <label>Follow Player Name: <input type="text" id="twFollowPlayer" placeholder="player name" disabled/></label>
         </div>
       </div>
