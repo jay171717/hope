@@ -1,13 +1,14 @@
 import { Vec3 } from "vec3";
 
 /**
- * Actions (no Continuous): mine, attack, place, eat, drop
+ * Actions (no Continuous): mine, attack, place, eat, drop, jump
  * Modes: Once, Interval, Stop
  *
- * - Attack ONLY hits entity at cursor (what bot is actually looking at)
- * - Place uses placeBlock if available and restores look angles afterward
+ * - Attack ONLY hits entityAtCursor(...) (what bot is actually looking at)
+ * - Place uses placeBlock if available and restores look afterwards
  * - Eat uses bot.consume() if available
  * - Drop tries to re-equip same item if possible after dropping
+ * - Jump toggles 'jump' control briefly
  */
 const DEFAULT_INTERVAL_TICKS = 10;
 const TICKS_PER_SECOND = 20;
@@ -74,27 +75,27 @@ export class ActionController {
     try {
       switch (key) {
         case "mine": {
-          // Mine only block at cursor so the bot doesn't auto-rotate.
+          // Mine the block at cursor (no forced head rotation)
           const blk = (() => { try { return b.blockAtCursor(6); } catch { return null; } })();
           if (blk) await b.dig(blk).catch(()=>{});
           break;
         }
         case "attack": {
-          // STRICT: only attack the entity the crosshair is on.
+          // STRICT: attack only the entity under crosshair
           let target = null;
           try { target = b.entityAtCursor ? b.entityAtCursor(4.5) : null; } catch {}
           if (target) await b.attack(target).catch(()=>{});
           break;
         }
         case "place": {
-          // Place against block at cursor, no look changes.
+          // Place against the block at cursor without changing look
           const blk = (() => { try { return b.blockAtCursor(6); } catch { return null; } })();
           if (blk && b.heldItem) {
             try {
               if (typeof b.placeBlock === "function") {
-                // Use the top face by default; this doesn't rotate the bot.
                 await b.placeBlock(blk, new Vec3(0, 1, 0)).catch(()=>{});
               } else {
+                // fallback: quick activate (right-click) - won't rotate the head
                 b.activateItem(false);
                 setTimeout(()=>{ try { b.deactivateItem(); } catch {} }, 150);
               }
@@ -121,12 +122,20 @@ export class ActionController {
               if (state.dropStack && typeof b.tossStack === "function") await b.tossStack(b.heldItem).catch(()=>{});
               else await b.toss(b.heldItem.type, null, 1).catch(()=>{});
             } catch {}
-            // Re-equip an item of the same name (if still available) to avoid switching to empty hand.
+            // try to re-equip same type to keep the main hand stable
             try {
               const found = b.inventory.items().find(it => it.name === prevName);
               if (found) await b.equip(found, "hand").catch(()=>{});
             } catch {}
           }
+          break;
+        }
+        case "jump": {
+          // Short jump press
+          try {
+            b.setControlState("jump", true);
+            setTimeout(()=>{ try { b.setControlState("jump", false); } catch {} }, 200);
+          } catch {}
           break;
         }
       }
