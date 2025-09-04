@@ -144,13 +144,10 @@ export class BotManager {
     bot.on("error", err => this.io.emit("bot:log", { id: e.id, line: `Error: ${err?.message || err}` }));
     bot.on("messagestr", (msg) => this.io.emit("bot:chat", { id: e.id, line: msg }));
 
-    // death => optional respawn (only when enabled)
     bot.on("death", () => {
       this.io.emit("bot:log", { id: e.id, line: "Bot died" });
       if (e.tweaks.autoRespawn) {
-        setTimeout(() => {
-          try { bot.respawn(); } catch (err) {}
-        }, 600);
+        setTimeout(() => { try { bot.respawn(); } catch {} }, 600);
       }
     });
   }
@@ -235,228 +232,57 @@ export class BotManager {
   }
 
   // ---------- UI commands ----------
-
-  chat(id, text) {
-    const e = this.bots.get(id); if (!e?.bot) return;
-    try { e.bot.chat(text); } catch {}
-  }
-
-  respawn(id) {
-    const e = this.bots.get(id); if (!e?.bot) return;
-    try { e.bot.respawn(); } catch {}
-  }
-
-  async equipSlot(id, index, hand) {
-    const e = this.bots.get(id); if (!e?.bot) return;
-    const b = e.bot;
-    try {
-      const slot = b.inventory.slots[9 + index] || null;
-      const dest = (hand === "off") ? "off-hand" : "hand";
-      if (!slot) {
-        if (dest === "hand") await b.unequip("hand").catch(()=>{});
-        else await b.unequip("off-hand").catch(()=>{});
-        return;
-      }
-      await b.equip(slot, dest).catch(async () => {
-        if (dest === "off-hand") {
-          try { await b.equip(slot, "offhand").catch(()=>{}); } catch {}
-        }
-      });
-    } catch (err) {
-      this.io.emit("bot:log", { id, line: `equipSlot error: ${err?.message || err}` });
-    }
-  }
-
-  // Movement / controls
-  setContinuousMove(id, dir, on) {
-    const e = this.bots.get(id); if (!e?.bot) return;
-    const map = { W: "forward", A: "left", S: "back", D: "right" };
-    const key = map[dir]; if (!key) return;
-    try { e.bot.setControlState(key, !!on); } catch {}
-  }
-
-  jumpOnce(id) {
-    const e = this.bots.get(id); if (!e?.bot) return;
-    try { e.bot.setControlState("jump", true); setTimeout(()=>{ try { e.bot.setControlState("jump", false); } catch {} }, 200); } catch {}
-  }
-
   toggleSneak(id) {
-    const e = this.bots.get(id); if (!e?.bot) return;
+    const e = this.bots.get(id);
+    if (!e?.bot) return;
     const b = e.bot;
+
     e._sneakState = !e._sneakState;
     try {
       b.setControlState("sneak", e._sneakState);
       this.io.emit("bot:log", { id, line: `Sneak ${e._sneakState ? "ON" : "OFF"}` });
     } catch (err) {
-      this.io.emit("bot:log", { id, line: `Sneak error: ${err.message}` });
+      this.io.emit("bot:log", { id, line: `Sneak toggle failed: ${err.message}` });
     }
-  }
-
-  stopPath(id) {
-    const e = this.bots.get(id); if (!e?.bot) return;
-    try { e.bot.pathfinder.setGoal(null); } catch {}
-  }
-
-  gotoXYZ(id, x, y, z) {
-    const e = this.bots.get(id); if (!e?.bot) return;
-    try { e.bot.pathfinder.setGoal(new goals.GoalBlock(Math.round(x), Math.round(y), Math.round(z)), true); } catch {}
-  }
-
-  rotateStep(id, dYawDeg = 0, dPitchDeg = 0) {
-    const e = this.bots.get(id); if (!e?.bot) return;
-    try {
-      const b = e.bot;
-      const yaw = b.entity.yaw + (dYawDeg * Math.PI / 180);
-      const pitch = b.entity.pitch + (dPitchDeg * Math.PI / 180);
-      b.look(yaw, pitch, true).catch(()=>{});
-    } catch {}
-  }
-
-  lookAtAngles(id, yawDeg, pitchDeg) {
-    const e = this.bots.get(id); if (!e?.bot) return;
-    try { e.bot.look(yawDeg * Math.PI/180, pitchDeg * Math.PI/180, true).catch(()=>{}); } catch {}
-  }
-
-  lookAtCoord(id, x, y, z) {
-    const e = this.bots.get(id); if (!e?.bot) return;
-    try { e.bot.lookAt(new Vec3(x, y, z)).catch(()=>{}); } catch {}
-  }
-
-  setActionMode(id, action, mode, options = {}) {
-    const e = this.bots.get(id); if (!e?.bot) return;
-    e.actions.setMode(action, mode, options);
-  }
-
-  // tweak toggles
-  setTweaks(id, toggles) {
-    const e = this.bots.get(id); if (!e) return;
-    e.tweaks = { ...e.tweaks, ...toggles };
-    const b = e.bot;
-
-    if (b) {
-      if (toggles.autoSprint !== undefined) {
-        try { b.setControlState("sprint", !!toggles.autoSprint); } catch {}
-      }
-
-      if (toggles.autoRespawn !== undefined) {
-        if (toggles.autoRespawn) {
-          if (!e._respListener) {
-            e._respListener = () => setTimeout(()=>{ try { b.respawn(); } catch {} }, 500);
-            try { b.on("death", e._respListener); } catch {}
-          }
-        } else {
-          if (e._respListener) {
-            try { b.removeListener("death", e._respListener); } catch {}
-            e._respListener = null;
-          }
-        }
-      }
-
-      if (toggles.autoEat !== undefined) {
-        if (toggles.autoEat) this._ensureAutoEat(e); else this._clearAutoEat(e);
-      }
-
-      if (toggles.followPlayer !== undefined) {
-        e.tweaks.followPlayer = toggles.followPlayer || null;
-        if (e.tweaks.followPlayer) this._ensureFollow(e);
-        else this._clearFollow(e);
-      }
-
-      if (toggles.autoSleep !== undefined) {
-        e.tweaks.autoSleep = !!toggles.autoSleep;
-        if (e.tweaks.autoSleep) this._ensureAutoSleep(e);
-        else this._clearAutoSleep(e);
-      }
-
-      if (toggles.autoMinePlace !== undefined) {
-        e.tweaks.autoMinePlace = !!toggles.autoMinePlace;
-      }
-    }
-
-    this.broadcastList();
-  }
-
-  // Auto-eat
-  _ensureAutoEat(e) {
-    if (!e.bot) { e.tweaks.autoEat = true; return; }
-    if (e._eatTimer) return;
-    const b = e.bot;
-    e._eatTimer = setInterval(async () => {
-      try {
-        if (!b) return;
-        const need = (b.food !== undefined && b.food <= 10) || (b.health !== undefined && b.health <= 10);
-        if (!need) return;
-        const edible = b.inventory.items().find(it => /apple|bread|porkchop|beef|chicken|stew|rabbit|melon|cookie|potato/i.test(it.name));
-        if (edible) {
-          await b.equip(edible, "hand").catch(()=>{});
-          try {
-            if (typeof b.consume === "function") {
-              await b.consume().catch(()=>{});
-            } else {
-              b.activateItem(false);
-              await new Promise(r => setTimeout(r, 1500));
-              try { b.deactivateItem(); } catch {}
-            }
-            this.io.emit("bot:log", { id: e.id, line: "Auto-eat: tried to eat." });
-          } catch (err) { this.io.emit("bot:log", { id: e.id, line: `Auto-eat error: ${err?.message||err}` }); }
-        }
-      } catch {}
-    }, 2500);
-  }
-  _clearAutoEat(e) { if (e._eatTimer) { clearInterval(e._eatTimer); e._eatTimer = null; } }
-
-  _ensureFollow(e) {
-    if (!e.bot) return;
-    if (e._followTimer) return;
-    const b = e.bot;
-    e._followTimer = setInterval(() => {
-      try {
-        if (!b) return;
-        const name = e.tweaks.followPlayer;
-        if (!name) return;
-        const plEntry = Object.values(b.players).find(p => (p.username === name) || (p.displayName === name));
-        const ent = plEntry?.entity;
-        if (ent) b.pathfinder.setGoal(new goals.GoalFollow(ent, 2), true);
-      } catch {}
-    }, 1200);
-  }
-  _clearFollow(e) {
-    if (e._followTimer) { clearInterval(e._followTimer); e._followTimer = null; }
-    if (e.bot) try { e.bot.pathfinder.setGoal(null); } catch {}
   }
 
   _ensureAutoSleep(e) {
-    if (!e.bot) return;
+    if (!e.bot) { e.tweaks.autoSleep = true; return; }
     if (e._sleepTimer) return;
     const b = e.bot;
+
     e._sleepTimer = setInterval(async () => {
       try {
-        const isNight = b.time.timeOfDay > 13000 && b.time.timeOfDay < 23000;
+        if (!b || !/overworld/i.test(b.game?.dimension || "")) return;
+        const time = b.time?.timeOfDay || 0;
+        const isNight = time > 12541 && time < 23458;
         if (!isNight || b.isSleeping) return;
 
         const beds = b.findBlocks({
-          matching: (block) => block.name.includes("bed"),
+          matching: blk => blk.name.includes("bed"),
           maxDistance: 10,
           count: 5
         });
 
-        if (!beds.length) return;
+        if (beds.length) {
+          const bedPos = beds[0];
+          const bedBlock = b.blockAt(bedPos);
 
-        const bedPos = beds[0];
-        const goal = new goals.GoalGetToBlock(bedPos.x, bedPos.y, bedPos.z);
-        await b.pathfinder.goto(goal);
+          this.io.emit("bot:log", { id: e.id, line: `Found bed at ${bedPos}` });
 
-        const bedBlock = b.blockAt(bedPos);
-        if (bedBlock) {
-          await b.sleep(bedBlock);
-          this.io.emit("bot:log", { id: e.id, line: "Auto-Sleep: sleeping" });
+          try {
+            await b.pathfinder.goto(new goals.GoalBlock(bedPos.x, bedPos.y, bedPos.z));
+            await b.sleep(bedBlock);
+            this.io.emit("bot:log", { id: e.id, line: "Bot is now sleeping" });
+          } catch (err) {
+            this.io.emit("bot:log", { id: e.id, line: `Sleep failed: ${err.message}` });
+          }
         }
       } catch (err) {
-        this.io.emit("bot:log", { id: e.id, line: `Auto-Sleep error: ${err.message}` });
+        this.io.emit("bot:log", { id: e.id, line: `AutoSleep error: ${err.message}` });
       }
     }, 10000);
   }
-  _clearAutoSleep(e) { if (e._sleepTimer) { clearInterval(e._sleepTimer); e._sleepTimer = null; } }
 
   _clearTimersAndListeners(e) {
     if (e._telemetryTimer) { clearInterval(e._telemetryTimer); e._telemetryTimer = null; }
@@ -465,9 +291,5 @@ export class BotManager {
     if (e._sleepTimer) { clearInterval(e._sleepTimer); e._sleepTimer = null; }
     if (e._respListener && e.bot) { try { e.bot.removeListener("death", e._respListener); } catch {} }
     e._respListener = null;
-  }
-
-  _log(id, line) {
-    this.io.emit("bot:log", { id, line });
   }
 }
