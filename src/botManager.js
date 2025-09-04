@@ -50,7 +50,6 @@ export class BotManager {
       toggledConnected: true,
       description: "",
       tweaks: {
-        // OFF by default
         autoReconnect: false,
         autoRespawn: false,
         autoSprint: false,
@@ -65,8 +64,8 @@ export class BotManager {
       _eatTimer: null,
       _followTimer: null,
       _sleepTimer: null,
-      _sneakState: false,
-      _movements: null
+      _respListener: null,
+      _sneakState: false
     };
     this.bots.set(useId, e);
     this._spawn(e);
@@ -119,28 +118,12 @@ export class BotManager {
     bot.once("spawn", () => {
       e.lastSeen = Date.now();
       try { e.mcData = mcdataFactory(bot.version); } catch { e.mcData = null; }
-
-      // Apply Movements honoring "autoMinePlace"
-      this._applyMovements(e);
-
+      try { bot.pathfinder.setMovements(new Movements(bot, e.mcData)); } catch {}
       this._wireTelemetry(e);
       this.io.emit("bot:status", { id: e.id, status: "online" });
       this.broadcastList();
-
       if (e.tweaks.autoSprint) try { bot.setControlState("sprint", true); } catch {}
-
-      // Apply enabled toggles (but NOT autoRespawn – handled centrally below)
-      if (e.tweaks.autoEat) this._ensureAutoEat(e);
-      if (e.tweaks.followPlayer) this._ensureFollow(e);
-      if (e.tweaks.autoSleep) this._ensureAutoSleep(e);
-    });
-
-    // Centralized respawn: OFF by default; only acts when autoRespawn true
-    bot.on("death", () => {
-      this.io.emit("bot:log", { id: e.id, line: "Bot died" });
-      if (e.tweaks.autoRespawn) {
-        setTimeout(() => { try { bot.respawn(); } catch {} }, 600);
-      }
+      this._applyTweaksAfterSpawn(e);
     });
 
     bot.on("end", (reason) => {
@@ -160,24 +143,27 @@ export class BotManager {
     bot.on("kicked", reason => this.io.emit("bot:log", { id: e.id, line: `Kicked: ${reason}` }));
     bot.on("error", err => this.io.emit("bot:log", { id: e.id, line: `Error: ${err?.message || err}` }));
     bot.on("messagestr", (msg) => this.io.emit("bot:chat", { id: e.id, line: msg }));
+
+    bot.on("death", () => {
+      this.io.emit("bot:log", { id: e.id, line: "Bot died" });
+      if (e.tweaks.autoRespawn) {
+        setTimeout(() => {
+          try { bot.respawn(); } catch {}
+        }, 600);
+      }
+    });
   }
 
-  _applyMovements(e) {
-    const b = e.bot; if (!b) return;
-    try {
-      const mov = new Movements(b, e.mcData || undefined);
-      // Respect "Auto Mine/Place": allow digging only when enabled
-      const allow = !!e.tweaks.autoMinePlace;
-      // Movements has different internals between versions; attempt best-effort flags:
-      if ("canDig" in mov) mov.canDig = allow;
-      if ("placeCost" in mov) mov.placeCost = allow ? 1 : Infinity;
-      // some versions allow scaffoldingBlocks or similar; try to clear if not allowed:
-      try { mov.scaffoldingBlocks = allow ? mov.scaffoldingBlocks || [] : []; } catch {}
-      e._movements = mov;
-      b.pathfinder.setMovements(mov);
-    } catch (err) {
-      // ignore movement apply errors (compatibility)
+  _applyTweaksAfterSpawn(e) {
+    const b = e.bot;
+    if (!b) return;
+    if (e.tweaks.autoRespawn && !e._respListener) {
+      e._respListener = () => setTimeout(() => { try { b.respawn(); } catch {} }, 500);
+      try { b.on("death", e._respListener); } catch {}
     }
+    if (e.tweaks.autoEat) this._ensureAutoEat(e);
+    if (e.tweaks.followPlayer) this._ensureFollow(e);
+    if (e.tweaks.autoSleep) this._ensureAutoSleep(e);
   }
 
   _wireTelemetry(e) {
@@ -248,7 +234,6 @@ export class BotManager {
   }
 
   // ---------- UI commands ----------
-
   chat(id, text) {
     const e = this.bots.get(id); if (!e?.bot) return;
     try { e.bot.chat(text); } catch {}
@@ -259,7 +244,6 @@ export class BotManager {
     try { e.bot.respawn(); } catch {}
   }
 
-  // equip an inventory slot into selected hand; index is 0..35 (hotbar+inventory)
   async equipSlot(id, index, hand) {
     const e = this.bots.get(id); if (!e?.bot) return;
     const b = e.bot;
@@ -267,7 +251,6 @@ export class BotManager {
       const slot = b.inventory.slots[9 + index] || null;
       const dest = (hand === "off") ? "off-hand" : "hand";
       if (!slot) {
-        // unequip
         if (dest === "hand") await b.unequip("hand").catch(()=>{});
         else await b.unequip("off-hand").catch(()=>{});
         return;
@@ -282,7 +265,6 @@ export class BotManager {
     }
   }
 
-  // Movement / controls
   setContinuousMove(id, dir, on) {
     const e = this.bots.get(id); if (!e?.bot) return;
     const map = { W: "forward", A: "left", S: "back", D: "right" };
@@ -298,11 +280,18 @@ export class BotManager {
   toggleSneak(id) {
     const e = this.bots.get(id); if (!e?.bot) return;
     try {
-      // use bot.getControlState to reflect actual state
-      const curr = e.bot.getControlState ? e.bot.getControlState("sneak") : !!e._sneakState;
+      const b = e.bot;
+      const curr = b.getControlState ? b.getControlState("sneak") : !!e._sneakState;
       const nxt = !curr;
-      e._sneakState = !!nxt;
-      e.bot.setControlState("sneak", !!nxt);
+      e._sneakState = nxt;
+
+      // Sneak disables sprint
+      b.setControlState("sprint", false);
+      b.setControlState("sneak", nxt);
+
+      // Force tiny movement update
+      b.setControlState("forward", b.getControlState("forward"));
+
       this.io.emit("bot:log", { id, line: `Sneak ${nxt ? "ON" : "OFF"}` });
     } catch (err) {
       this.io.emit("bot:log", { id, line: `toggleSneak error: ${err?.message || err}` });
@@ -316,10 +305,7 @@ export class BotManager {
 
   gotoXYZ(id, x, y, z) {
     const e = this.bots.get(id); if (!e?.bot) return;
-    try {
-      if (e._movements) e.bot.pathfinder.setMovements(e._movements);
-      e.bot.pathfinder.setGoal(new goals.GoalBlock(Math.round(x), Math.round(y), Math.round(z)), true);
-    } catch {}
+    try { e.bot.pathfinder.setGoal(new goals.GoalBlock(Math.round(x), Math.round(y), Math.round(z)), true); } catch {}
   }
 
   rotateStep(id, dYawDeg = 0, dPitchDeg = 0) {
@@ -347,7 +333,6 @@ export class BotManager {
     e.actions.setMode(action, mode, options);
   }
 
-  // tweak toggles: many side-effects
   setTweaks(id, toggles) {
     const e = this.bots.get(id); if (!e) return;
     e.tweaks = { ...e.tweaks, ...toggles };
@@ -356,6 +341,20 @@ export class BotManager {
     if (b) {
       if (toggles.autoSprint !== undefined) {
         try { b.setControlState("sprint", !!toggles.autoSprint); } catch {}
+      }
+
+      if (toggles.autoRespawn !== undefined) {
+        if (toggles.autoRespawn) {
+          if (!e._respListener) {
+            e._respListener = () => setTimeout(()=>{ try { b.respawn(); } catch {} }, 500);
+            try { b.on("death", e._respListener); } catch {}
+          }
+        } else {
+          if (e._respListener) {
+            try { b.removeListener("death", e._respListener); } catch {}
+            e._respListener = null;
+          }
+        }
       }
 
       if (toggles.autoEat !== undefined) {
@@ -376,27 +375,10 @@ export class BotManager {
 
       if (toggles.autoMinePlace !== undefined) {
         e.tweaks.autoMinePlace = !!toggles.autoMinePlace;
-        this._applyMovements(e); // re-apply movements to reflect canDig/placeCost
       }
-      // autoReconnect handled by 'end' handler.
     }
 
     this.broadcastList();
-  }
-
-  // --------- Auto-eat ----------
-  _findEdibleItem(bot) {
-    const namesByPref = [
-      "cooked_beef","steak","cooked_porkchop","cooked_mutton","cooked_chicken","cooked_cod","cooked_salmon",
-      "rabbit_stew","mushroom_stew","beetroot_soup","baked_potato","pumpkin_pie",
-      "bread","apple","carrot","beetroot","potato","melon_slice","dried_kelp","cookie","chorus_fruit"
-    ];
-    const items = bot.inventory.items();
-    for (const pref of namesByPref) {
-      const it = items.find(i => i.name === pref);
-      if (it) return it;
-    }
-    return items.find(i => /(beef|pork|mutton|chicken|cod|salmon|bread|apple|carrot|beet|potato|melon|cookie|stew|soup|pie|kelp|chorus)/i.test(i.name));
   }
 
   _ensureAutoEat(e) {
@@ -406,28 +388,27 @@ export class BotManager {
     e._eatTimer = setInterval(async () => {
       try {
         if (!b) return;
-        const lowFood = (typeof b.food === "number") && b.food <= 10;
-        const lowHp = (typeof b.health === "number") && b.health <= 10;
-        if (!lowFood && !lowHp) return;
-
-        const edible = this._findEdibleItem(b);
-        if (!edible) return;
-
-        await b.equip(edible, "hand").catch(()=>{});
-        if (typeof b.consume === "function") {
-          await b.consume().catch(()=>{});
-        } else {
-          b.activateItem(false);
-          await new Promise(r => setTimeout(r, 1600));
-          try { b.deactivateItem(); } catch {}
+        const need = (b.food !== undefined && b.food <= 10) || (b.health !== undefined && b.health <= 10);
+        if (!need) return;
+        const edible = b.inventory.items().find(it => /apple|bread|porkchop|beef|chicken|stew|rabbit|melon|cookie|potato/i.test(it.name));
+        if (edible) {
+          await b.equip(edible, "hand").catch(()=>{});
+          try {
+            if (typeof b.consume === "function") {
+              await b.consume().catch(()=>{});
+            } else {
+              b.activateItem(false);
+              await new Promise(r => setTimeout(r, 1500));
+              try { b.deactivateItem(); } catch {}
+            }
+            this.io.emit("bot:log", { id: e.id, line: "Auto-eat: tried to eat." });
+          } catch (err) { this.io.emit("bot:log", { id: e.id, line: `Auto-eat error: ${err?.message||err}` }); }
         }
-        this.io.emit("bot:log", { id: e.id, line: "Auto-eat: consumed food." });
       } catch {}
-    }, 2000);
+    }, 2500);
   }
   _clearAutoEat(e) { if (e._eatTimer) { clearInterval(e._eatTimer); e._eatTimer = null; } }
 
-  // --------- Follow player (respects movements) ----------
   _ensureFollow(e) {
     if (!e.bot) return;
     if (e._followTimer) return;
@@ -437,12 +418,9 @@ export class BotManager {
         if (!b) return;
         const name = e.tweaks.followPlayer;
         if (!name) return;
-        const plEntry = Object.values(b.players).find(p => (p?.username === name) || (p?.displayName === name));
+        const plEntry = Object.values(b.players).find(p => (p.username === name) || (p.displayName === name));
         const ent = plEntry?.entity;
-        if (ent) {
-          if (e._movements) b.pathfinder.setMovements(e._movements);
-          b.pathfinder.setGoal(new goals.GoalFollow(ent, 2), true);
-        }
+        if (ent) b.pathfinder.setGoal(new goals.GoalFollow(ent, 2), true);
       } catch {}
     }, 1200);
   }
@@ -451,7 +429,6 @@ export class BotManager {
     if (e.bot) try { e.bot.pathfinder.setGoal(null); } catch {}
   }
 
-  // --------- Auto-sleep (radius 10; pathfind only if autoMinePlace enabled or path possible)
   _ensureAutoSleep(e) {
     if (!e.bot) { e.tweaks.autoSleep = true; return; }
     if (e._sleepTimer) return;
@@ -460,67 +437,59 @@ export class BotManager {
       try {
         if (!b) return;
         if (!/overworld/i.test(b.game?.dimension || "")) return;
-        const time = b.time?.timeOfDay ?? 0;
+        const time = b.time?.timeOfDay || 0;
         const isNight = time > 12541 && time < 23458;
         if (!isNight) return;
-
         const center = b.entity.position;
-        // Find nearest bed within radius 10 (search up/down a couple of blocks)
-        let nearest = null;
-        let bestDist2 = Infinity;
-        const R = 10;
-        for (let dx = -R; dx <= R; dx++) {
-          for (let dz = -R; dz <= R; dz++) {
-            for (let dy = -2; dy <= 2; dy++) {
-              try {
-                const pos = center.offset(dx, dy, dz);
-                const block = b.blockAt(pos);
-                if (block?.name?.includes("bed")) {
-                  const dist2 = dx*dx + dy*dy + dz*dz;
-                  if (dist2 < bestDist2) {
-                    bestDist2 = dist2;
-                    nearest = block;
+        for (let dx = -10; dx <= 10; dx++) {
+          for (let dz = -10; dz <= 10; dz++) {
+            try {
+              const pos = center.offset(dx, 0, dz);
+              const block = b.blockAt(pos);
+              if (block?.name?.includes("bed")) {
+                const dist = Math.hypot(dx, dz);
+                if (dist <= 2) {
+                  let targetBed = block;
+                  try {
+                    const props = block.getProperties?.();
+                    if (props && props.part === "foot") {
+                      const facing = props.facing;
+                      const offset = {
+                        north: new Vec3(0, 0, -1),
+                        south: new Vec3(0, 0, 1),
+                        west: new Vec3(-1, 0, 0),
+                        east: new Vec3(1, 0, 0)
+                      }[facing] || new Vec3(0, 0, 0);
+                      const head = b.blockAt(block.position.plus(offset));
+                      if (head?.name?.includes("bed")) targetBed = head;
+                    }
+                  } catch {}
+                  try { await b.sleep(targetBed); } catch (err) {}
+                } else {
+                  if (e.tweaks.autoMinePlace) {
+                    try { await b.pathfinder.goto(new goals.GoalBlock(block.position.x, block.position.y, block.position.z)); } catch {}
+                    let targetBed = block;
+                    try {
+                      const props = block.getProperties?.();
+                      if (props && props.part === "foot") {
+                        const facing = props.facing;
+                        const offset = {
+                          north: new Vec3(0, 0, -1),
+                          south: new Vec3(0, 0, 1),
+                          west: new Vec3(-1, 0, 0),
+                          east: new Vec3(1, 0, 0)
+                        }[facing] || new Vec3(0, 0, 0);
+                        const head = b.blockAt(block.position.plus(offset));
+                        if (head?.name?.includes("bed")) targetBed = head;
+                      }
+                    } catch {}
+                    try { await b.sleep(targetBed); } catch {}
                   }
                 }
-              } catch {}
-            }
+                return;
+              }
+            } catch {}
           }
-        }
-
-        if (!nearest) return;
-        const horizDist = Math.hypot(center.x - nearest.position.x, center.z - nearest.position.z);
-
-        // If bed is very close, try to sleep directly
-        if (horizDist <= 2) {
-          try { await b.sleep(nearest).catch(()=>{}); } catch {}
-          return;
-        }
-
-        // Bed is farther (but within 10): attempt to pathfind to it WITHOUT digging first
-        const goal = new goals.GoalBlock(nearest.position.x, nearest.position.y, nearest.position.z);
-        let reached = false;
-        try {
-          // ensure movements reflect current autoMinePlace setting (no digging by default)
-          if (e._movements) b.pathfinder.setMovements(e._movements);
-          await b.pathfinder.goto(goal);
-          reached = true;
-        } catch (err) {
-          // path failed
-          reached = false;
-        }
-
-        if (!reached && e.tweaks.autoMinePlace) {
-          // Allow digging/placing and retry once
-          try {
-            // re-apply movements (mov.canDig should be true if autoMinePlace)
-            this._applyMovements(e);
-            await b.pathfinder.goto(goal);
-            reached = true;
-          } catch {}
-        }
-
-        if (reached) {
-          try { await b.sleep(nearest).catch(()=>{}); } catch {}
         }
       } catch {}
     }, 5000);
@@ -532,5 +501,7 @@ export class BotManager {
     if (e._eatTimer) { clearInterval(e._eatTimer); e._eatTimer = null; }
     if (e._followTimer) { clearInterval(e._followTimer); e._followTimer = null; }
     if (e._sleepTimer) { clearInterval(e._sleepTimer); e._sleepTimer = null; }
+    if (e._respListener && e.bot) { try { e.bot.removeListener("death", e._respListener); } catch {} }
+    e._respListener = null;
   }
 }
