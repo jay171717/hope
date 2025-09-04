@@ -422,4 +422,65 @@ export class BotManager {
   }
 
   _ensureAutoSleep(e) {
-    if (!e.bot
+    if (!e.bot) { e.tweaks.autoSleep = true; return; }
+    if (e._sleepTimer) return;
+    const b = e.bot;
+    e._sleepTimer = setInterval(async () => {
+      try {
+        if (!b) return;
+        if (!/overworld/i.test(b.game?.dimension || "")) return;
+
+        const time = b.time?.timeOfDay || 0;
+        const isNight = time > 12541 && time < 23458;
+        if (!isNight) return;
+
+        console.log(`[Auto-Sleep] Checking for bed. autoMinePlace=${e.tweaks.autoMinePlace}`);
+
+        const center = b.entity.position;
+        let foundBed = null;
+
+        for (let dx = -10; dx <= 10; dx++) {
+          for (let dz = -10; dz <= 10; dz++) {
+            try {
+              const pos = center.offset(dx, 0, dz);
+              const block = b.blockAt(pos);
+              if (block?.name?.includes("bed")) {
+                foundBed = block;
+                const dist = Math.hypot(dx, dz);
+                if (dist <= 2) {
+                  console.log(`[Auto-Sleep] Bed within 2 blocks. Sleeping now.`);
+                  await b.sleep(block).catch(err => console.log(`[Auto-Sleep] Sleep failed: ${err.message}`));
+                } else if (e.tweaks.autoMinePlace) {
+                  console.log(`[Auto-Sleep] Bed at distance ${dist.toFixed(1)}. Pathing...`);
+                  await b.pathfinder.goto(new goals.GoalBlock(block.position.x, block.position.y, block.position.z));
+                  console.log(`[Auto-Sleep] Reached bed. Attempting sleep...`);
+                  await b.sleep(block).catch(err => console.log(`[Auto-Sleep] Sleep at bed failed: ${err.message}`));
+                } else {
+                  console.log(`[Auto-Sleep] Found bed but autoMinePlace=false, not pathing.`);
+                }
+                return;
+              }
+            } catch {}
+          }
+        }
+
+        if (!foundBed) {
+          console.log(`[Auto-Sleep] No bed found within 10 block radius.`);
+        }
+
+      } catch (err) {
+        console.log(`[Auto-Sleep] Error: ${err.message}`);
+      }
+    }, 5000);
+  }
+  _clearAutoSleep(e) { if (e._sleepTimer) { clearInterval(e._sleepTimer); e._sleepTimer = null; } }
+
+  _clearTimersAndListeners(e) {
+    if (e._telemetryTimer) { clearInterval(e._telemetryTimer); e._telemetryTimer = null; }
+    if (e._eatTimer) { clearInterval(e._eatTimer); e._eatTimer = null; }
+    if (e._followTimer) { clearInterval(e._followTimer); e._followTimer = null; }
+    if (e._sleepTimer) { clearInterval(e._sleepTimer); e._sleepTimer = null; }
+    if (e._respListener && e.bot) { try { e.bot.removeListener("death", e._respListener); } catch {} }
+    e._respListener = null;
+  }
+}
