@@ -1,14 +1,13 @@
 import { Vec3 } from "vec3";
 
 /**
- * Actions (no Continuous): mine, attack, place, eat, drop, jump
+ * Actions (no Continuous): mine, attack, place, eat, drop
  * Modes: Once, Interval, Stop
  *
- * - Attack ONLY hits entityAtCursor(...) (what bot is actually looking at)
- * - Place uses placeBlock if available and restores look afterwards
+ * - Attack uses entityAtCursor (only hits what bot is looking at)
+ * - Place uses placeBlock if available and restores look
  * - Eat uses bot.consume() if available
  * - Drop tries to re-equip same item if possible after dropping
- * - Jump toggles 'jump' control briefly
  */
 const DEFAULT_INTERVAL_TICKS = 10;
 const TICKS_PER_SECOND = 20;
@@ -75,27 +74,23 @@ export class ActionController {
     try {
       switch (key) {
         case "mine": {
-          // Mine the block at cursor (no forced head rotation)
           const blk = (() => { try { return b.blockAtCursor(6); } catch { return null; } })();
           if (blk) await b.dig(blk).catch(()=>{});
           break;
         }
         case "attack": {
-          // STRICT: attack only the entity under crosshair
           let target = null;
-          try { target = b.entityAtCursor ? b.entityAtCursor(4.5) : null; } catch {}
+          try { target = b.entityAtCursor ? b.entityAtCursor(6) : null; } catch {}
           if (target) await b.attack(target).catch(()=>{});
           break;
         }
         case "place": {
-          // Place against the block at cursor without changing look
           const blk = (() => { try { return b.blockAtCursor(6); } catch { return null; } })();
           if (blk && b.heldItem) {
             try {
               if (typeof b.placeBlock === "function") {
                 await b.placeBlock(blk, new Vec3(0, 1, 0)).catch(()=>{});
               } else {
-                // fallback: quick activate (right-click) - won't rotate the head
                 b.activateItem(false);
                 setTimeout(()=>{ try { b.deactivateItem(); } catch {} }, 150);
               }
@@ -109,7 +104,7 @@ export class ActionController {
               await b.consume().catch(()=>{});
             } else {
               b.activateItem(false);
-              await new Promise(r => setTimeout(r, 1600));
+              await new Promise(r => setTimeout(r, 1500));
               try { b.deactivateItem(); } catch {}
             }
           }
@@ -122,20 +117,11 @@ export class ActionController {
               if (state.dropStack && typeof b.tossStack === "function") await b.tossStack(b.heldItem).catch(()=>{});
               else await b.toss(b.heldItem.type, null, 1).catch(()=>{});
             } catch {}
-            // try to re-equip same type to keep the main hand stable
             try {
               const found = b.inventory.items().find(it => it.name === prevName);
               if (found) await b.equip(found, "hand").catch(()=>{});
             } catch {}
           }
-          break;
-        }
-        case "jump": {
-          // Short jump press
-          try {
-            b.setControlState("jump", true);
-            setTimeout(()=>{ try { b.setControlState("jump", false); } catch {} }, 200);
-          } catch {}
           break;
         }
       }
