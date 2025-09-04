@@ -65,9 +65,7 @@ export class BotManager {
       _followTimer: null,
       _sleepTimer: null,
       _respListener: null,
-      _sneakState: false,
-      _sneakInterval: null,
-      _movements: null
+      _sneakState: false
     };
     this.bots.set(useId, e);
     this._spawn(e);
@@ -120,14 +118,7 @@ export class BotManager {
     bot.once("spawn", () => {
       e.lastSeen = Date.now();
       try { e.mcData = mcdataFactory(bot.version); } catch { e.mcData = null; }
-
-      try {
-        e._movements = new Movements(bot, e.mcData || mcdataFactory(bot.version));
-        e._movements.canDig = !!e.tweaks.autoMinePlace;
-        e._movements.allow1by1towers = false;
-        bot.pathfinder.setMovements(e._movements);
-      } catch {}
-
+      try { bot.pathfinder.setMovements(new Movements(bot, e.mcData)); } catch {}
       this._wireTelemetry(e);
       this.io.emit("bot:status", { id: e.id, status: "online" });
       this.broadcastList();
@@ -153,10 +144,13 @@ export class BotManager {
     bot.on("error", err => this.io.emit("bot:log", { id: e.id, line: `Error: ${err?.message || err}` }));
     bot.on("messagestr", (msg) => this.io.emit("bot:chat", { id: e.id, line: msg }));
 
+    // death => optional respawn (only when enabled)
     bot.on("death", () => {
       this.io.emit("bot:log", { id: e.id, line: "Bot died" });
       if (e.tweaks.autoRespawn) {
-        setTimeout(() => { try { bot.respawn(); } catch {} }, 600);
+        setTimeout(() => {
+          try { bot.respawn(); } catch (err) {}
+        }, 600);
       }
     });
   }
@@ -241,8 +235,15 @@ export class BotManager {
   }
 
   // ---------- UI commands ----------
-  chat(id, text) { const e = this.bots.get(id); if (e?.bot) try { e.bot.chat(text); } catch {} }
-  respawn(id) { const e = this.bots.get(id); if (e?.bot) try { e.bot.respawn(); } catch {} }
+  chat(id, text) {
+    const e = this.bots.get(id); if (!e?.bot) return;
+    try { e.bot.chat(text); } catch {}
+  }
+
+  respawn(id) {
+    const e = this.bots.get(id); if (!e?.bot) return;
+    try { e.bot.respawn(); } catch {}
+  }
 
   async equipSlot(id, index, hand) {
     const e = this.bots.get(id); if (!e?.bot) return;
@@ -256,7 +257,9 @@ export class BotManager {
         return;
       }
       await b.equip(slot, dest).catch(async () => {
-        if (dest === "off-hand") { try { await b.equip(slot, "offhand").catch(()=>{}); } catch {} }
+        if (dest === "off-hand") {
+          try { await b.equip(slot, "offhand").catch(()=>{}); } catch {}
+        }
       });
     } catch (err) {
       this.io.emit("bot:log", { id, line: `equipSlot error: ${err?.message || err}` });
@@ -277,22 +280,49 @@ export class BotManager {
 
   toggleSneak(id) {
     const e = this.bots.get(id); if (!e?.bot) return;
-    const b = e.bot;
-    e._sneakState = !e._sneakState;
-    if (e._sneakInterval) { clearInterval(e._sneakInterval); e._sneakInterval = null; }
-    try { b.setControlState("sneak", !!e._sneakState); } catch {}
-    if (e._sneakState) {
-      e._sneakInterval = setInterval(() => { try { b.setControlState("sneak", true); } catch {} }, 800);
+    try {
+      e._sneakState = !e._sneakState;
+      e.bot.setControlState("sneak", !!e._sneakState);
+      this.io.emit("bot:log", { id, line: `Sneak ${e._sneakState ? "ON" : "OFF"}` });
+    } catch (err) {
+      this.io.emit("bot:log", { id, line: `toggleSneak error: ${err?.message || err}` });
     }
-    this.io.emit("bot:log", { id, line: `Sneak ${e._sneakState ? "ON" : "OFF"}` });
   }
 
-  stopPath(id) { const e = this.bots.get(id); if (e?.bot) try { e.bot.pathfinder.setGoal(null); } catch {} }
-  gotoXYZ(id, x, y, z) { const e = this.bots.get(id); if (e?.bot) try { e.bot.pathfinder.setGoal(new goals.GoalBlock(Math.round(x), Math.round(y), Math.round(z)), true); } catch {} }
-  rotateStep(id, dYawDeg=0, dPitchDeg=0) { const e = this.bots.get(id); if (e?.bot) try { const b = e.bot; b.look(b.entity.yaw+(dYawDeg*Math.PI/180), b.entity.pitch+(dPitchDeg*Math.PI/180), true).catch(()=>{}); } catch {} }
-  lookAtAngles(id,yawDeg,pitchDeg){const e=this.bots.get(id); if(e?.bot) try{e.bot.look(yawDeg*Math.PI/180,pitchDeg*Math.PI/180,true).catch(()=>{});}catch{}}
-  lookAtCoord(id,x,y,z){const e=this.bots.get(id); if(e?.bot) try{e.bot.lookAt(new Vec3(x,y,z)).catch(()=>{});}catch{}}
-  setActionMode(id, action, mode, options={}) { const e=this.bots.get(id); if(e?.bot) e.actions.setMode(action,mode,options); }
+  stopPath(id) {
+    const e = this.bots.get(id); if (!e?.bot) return;
+    try { e.bot.pathfinder.setGoal(null); } catch {}
+  }
+
+  gotoXYZ(id, x, y, z) {
+    const e = this.bots.get(id); if (!e?.bot) return;
+    try { e.bot.pathfinder.setGoal(new goals.GoalBlock(Math.round(x), Math.round(y), Math.round(z)), true); } catch {}
+  }
+
+  rotateStep(id, dYawDeg = 0, dPitchDeg = 0) {
+    const e = this.bots.get(id); if (!e?.bot) return;
+    try {
+      const b = e.bot;
+      const yaw = b.entity.yaw + (dYawDeg * Math.PI / 180);
+      const pitch = b.entity.pitch + (dPitchDeg * Math.PI / 180);
+      b.look(yaw, pitch, true).catch(()=>{});
+    } catch {}
+  }
+
+  lookAtAngles(id, yawDeg, pitchDeg) {
+    const e = this.bots.get(id); if (!e?.bot) return;
+    try { e.bot.look(yawDeg * Math.PI/180, pitchDeg * Math.PI/180, true).catch(()=>{}); } catch {}
+  }
+
+  lookAtCoord(id, x, y, z) {
+    const e = this.bots.get(id); if (!e?.bot) return;
+    try { e.bot.lookAt(new Vec3(x, y, z)).catch(()=>{}); } catch {}
+  }
+
+  setActionMode(id, action, mode, options = {}) {
+    const e = this.bots.get(id); if (!e?.bot) return;
+    e.actions.setMode(action, mode, options);
+  }
 
   setTweaks(id, toggles) {
     const e = this.bots.get(id); if (!e) return;
@@ -300,7 +330,10 @@ export class BotManager {
     const b = e.bot;
 
     if (b) {
-      if (toggles.autoSprint !== undefined) { try { b.setControlState("sprint", !!toggles.autoSprint); } catch {} }
+      if (toggles.autoSprint !== undefined) {
+        try { b.setControlState("sprint", !!toggles.autoSprint); } catch {}
+      }
+
       if (toggles.autoRespawn !== undefined) {
         if (toggles.autoRespawn) {
           if (!e._respListener) {
@@ -308,21 +341,38 @@ export class BotManager {
             try { b.on("death", e._respListener); } catch {}
           }
         } else {
-          if (e._respListener) { try { b.removeListener("death", e._respListener); } catch {} }
-          e._respListener = null;
+          if (e._respListener) {
+            try { b.removeListener("death", e._respListener); } catch {}
+            e._respListener = null;
+          }
         }
       }
-      if (toggles.autoEat !== undefined) { if (toggles.autoEat) this._ensureAutoEat(e); else this._clearAutoEat(e); }
-      if (toggles.followPlayer !== undefined) { e.tweaks.followPlayer = toggles.followPlayer || null; if (e.tweaks.followPlayer) this._ensureFollow(e); else this._clearFollow(e); }
-      if (toggles.autoSleep !== undefined) { e.tweaks.autoSleep = !!toggles.autoSleep; if (e.tweaks.autoSleep) this._ensureAutoSleep(e); else this._clearAutoSleep(e); }
+
+      if (toggles.autoEat !== undefined) {
+        if (toggles.autoEat) this._ensureAutoEat(e); else this._clearAutoEat(e);
+      }
+
+      if (toggles.followPlayer !== undefined) {
+        e.tweaks.followPlayer = toggles.followPlayer || null;
+        if (e.tweaks.followPlayer) this._ensureFollow(e);
+        else this._clearFollow(e);
+      }
+
+      if (toggles.autoSleep !== undefined) {
+        e.tweaks.autoSleep = !!toggles.autoSleep;
+        if (e.tweaks.autoSleep) this._ensureAutoSleep(e);
+        else this._clearAutoSleep(e);
+      }
+
       if (toggles.autoMinePlace !== undefined) {
         e.tweaks.autoMinePlace = !!toggles.autoMinePlace;
-        if (e._movements) e._movements.canDig = e.tweaks.autoMinePlace;
       }
     }
+
     this.broadcastList();
   }
 
+  // Auto-eat
   _ensureAutoEat(e) {
     if (!e.bot) { e.tweaks.autoEat = true; return; }
     if (e._eatTimer) return;
@@ -332,7 +382,7 @@ export class BotManager {
         if (!b) return;
         const need = (b.food !== undefined && b.food <= 10) || (b.health !== undefined && b.health <= 10);
         if (!need) return;
-        const edible = b.inventory.items().find(it => /apple|bread|porkchop|beef|chicken|stew|melon|cookie|potato/i.test(it.name));
+        const edible = b.inventory.items().find(it => /apple|bread|porkchop|beef|chicken|stew|rabbit|melon|cookie|potato/i.test(it.name));
         if (edible) {
           await b.equip(edible, "hand").catch(()=>{});
           try {
@@ -344,12 +394,12 @@ export class BotManager {
               try { b.deactivateItem(); } catch {}
             }
             this.io.emit("bot:log", { id: e.id, line: "Auto-eat: tried to eat." });
-          } catch {}
+          } catch (err) { this.io.emit("bot:log", { id: e.id, line: `Auto-eat error: ${err?.message||err}` }); }
         }
       } catch {}
     }, 2500);
   }
-  _clearAutoEat(e){ if(e._eatTimer){ clearInterval(e._eatTimer); e._eatTimer=null; } }
+  _clearAutoEat(e) { if (e._eatTimer) { clearInterval(e._eatTimer); e._eatTimer = null; } }
 
   _ensureFollow(e) {
     if (!e.bot) return;
@@ -360,56 +410,16 @@ export class BotManager {
         if (!b) return;
         const name = e.tweaks.followPlayer;
         if (!name) return;
-        const plEntry = Object.values(b.players).find(p => p.username === name);
+        const plEntry = Object.values(b.players).find(p => (p.username === name) || (p.displayName === name));
         const ent = plEntry?.entity;
         if (ent) b.pathfinder.setGoal(new goals.GoalFollow(ent, 2), true);
       } catch {}
     }, 1200);
   }
-  _clearFollow(e){ if(e._followTimer){clearInterval(e._followTimer);e._followTimer=null;} if(e.bot)try{e.bot.pathfinder.setGoal(null);}catch{} }
+  _clearFollow(e) {
+    if (e._followTimer) { clearInterval(e._followTimer); e._followTimer = null; }
+    if (e.bot) try { e.bot.pathfinder.setGoal(null); } catch {}
+  }
 
   _ensureAutoSleep(e) {
-    if (!e.bot) { e.tweaks.autoSleep = true; return; }
-    if (e._sleepTimer) return;
-    const b = e.bot;
-    e._sleepTimer = setInterval(async () => {
-      try {
-        if (!b) return;
-        if (!/overworld/i.test(b.game?.dimension || "")) return;
-        const time = b.time?.timeOfDay || 0;
-        const isNight = time > 12541 && time < 23458;
-        if (!isNight) return;
-        const center = b.entity.position;
-        for (let dx = -10; dx <= 10; dx++) {
-          for (let dz = -10; dz <= 10; dz++) {
-            try {
-              const pos = center.offset(dx, 0, dz);
-              const block = b.blockAt(pos);
-              if (block?.name?.includes("bed")) {
-                const dist = Math.hypot(dx, dz);
-                if (dist <= 2) {
-                  try { await b.sleep(block); this.io.emit("bot:log", { id: e.id, line: "Sleeping..." }); } catch {}
-                } else if (e.tweaks.autoMinePlace) {
-                  try { await b.pathfinder.goto(new goals.GoalBlock(block.position.x, block.position.y, block.position.z)); } catch {}
-                  try { await b.sleep(block); } catch {}
-                }
-                return;
-              }
-            } catch {}
-          }
-        }
-      } catch {}
-    }, 5000);
-  }
-  _clearAutoSleep(e){ if(e._sleepTimer){clearInterval(e._sleepTimer);e._sleepTimer=null;} }
-
-  _clearTimersAndListeners(e) {
-    if (e._telemetryTimer) { clearInterval(e._telemetryTimer); e._telemetryTimer=null; }
-    if (e._eatTimer) { clearInterval(e._eatTimer); e._eatTimer=null; }
-    if (e._followTimer) { clearInterval(e._followTimer); e._followTimer=null; }
-    if (e._sleepTimer) { clearInterval(e._sleepTimer); e._sleepTimer=null; }
-    if (e._sneakInterval) { clearInterval(e._sneakInterval); e._sneakInterval=null; }
-    if (e._respListener && e.bot) { try { e.bot.removeListener("death", e._respListener); } catch {} }
-    e._respListener=null;
-  }
-}
+    if (!e.bot
