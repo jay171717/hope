@@ -16,6 +16,6 @@
     "minecraft-server-util": "^5.4.4",
     "socket.io": "^4.7.5",
     "vec3": "^0.1.10",
-    "mineflayer-auto-eat": "^0.1.0",
+    "mineflayer-auto-eat": "^0.1.0"
   }
 }
