@@ -1,13 +1,14 @@
 import { Vec3 } from "vec3";
 
 /**
- * Actions (no Continuous): mine, attack, place, eat, drop
+ * Actions (no Continuous): mine, attack, place, eat, drop, jump
  * Modes: Once, Interval, Stop
  *
- * - Attack uses entityAtCursor (only hits what bot is looking at)
+ * - Attack uses entityAtCursor (must be looking at entity)
  * - Place uses placeBlock if available and restores look
  * - Eat uses bot.consume() if available
  * - Drop tries to re-equip same item if possible after dropping
+ * - Jump sets jump ON briefly
  */
 const DEFAULT_INTERVAL_TICKS = 10;
 const TICKS_PER_SECOND = 20;
@@ -117,11 +118,19 @@ export class ActionController {
               if (state.dropStack && typeof b.tossStack === "function") await b.tossStack(b.heldItem).catch(()=>{});
               else await b.toss(b.heldItem.type, null, 1).catch(()=>{});
             } catch {}
+            // try to re-equip same type if available to preserve mainhand
             try {
               const found = b.inventory.items().find(it => it.name === prevName);
               if (found) await b.equip(found, "hand").catch(()=>{});
             } catch {}
           }
+          break;
+        }
+        case "jump": {
+          try {
+            b.setControlState("jump", true);
+            setTimeout(() => { try { b.setControlState("jump", false); } catch {} }, 300);
+          } catch {}
           break;
         }
       }
