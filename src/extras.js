@@ -22,28 +22,35 @@ export function toggleSneak(entry, io) {
   entry._sneakState = !entry._sneakState;
 
   if (entry._sneakState) {
-    // start sneaking
+    // --- ENABLE SNEAK ---
     bot.setControlState("sneak", true);
 
-    // send raw packet to be 100% sure
+    // Force packet
     try {
       bot._client.write("entity_action", {
         entityId: bot.entity.id,
-        actionId: 0, // start sneaking
+        actionId: 0, // START SNEAKING
         jumpBoost: 0
       });
     } catch {}
 
     io.emit("bot:log", { id: entry.id, line: "Sneak mode activated" });
   } else {
-    // stop sneaking
+    // --- DISABLE SNEAK ---
     bot.setControlState("sneak", false);
 
-    // send raw packet to stop sneaking
+    // Force packet(s) to unsneak
     try {
+      // Normal stop sneaking
       bot._client.write("entity_action", {
         entityId: bot.entity.id,
-        actionId: 2, // stop sneaking
+        actionId: 2, // STOP SNEAKING
+        jumpBoost: 0
+      });
+      // Extra fallback: sometimes older protocols need actionId 1 (release shift key)
+      bot._client.write("entity_action", {
+        entityId: bot.entity.id,
+        actionId: 1, // RELEASE SNEAK
         jumpBoost: 0
       });
     } catch {}
@@ -59,15 +66,21 @@ export function clearSneak(entry) {
   if (entry.bot) {
     entry.bot.setControlState("sneak", false);
     try {
-      entry.bot._client.write("entity_action", {
+      bot._client.write("entity_action", {
         entityId: entry.bot.entity.id,
-        actionId: 2, // stop sneaking
+        actionId: 2, // STOP SNEAKING
+        jumpBoost: 0
+      });
+      bot._client.write("entity_action", {
+        entityId: entry.bot.entity.id,
+        actionId: 1, // RELEASE SNEAK
         jumpBoost: 0
       });
     } catch {}
   }
   entry._sneakState = false;
 }
+
 
 
 // ---------- Auto-sleep (kept & slightly hardened) ----------
