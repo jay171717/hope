@@ -49,7 +49,7 @@ io.on("connection", socket => {
   socket.on("bot:respawn", id => manager.respawn(id));
 
   socket.on("bot:equipSlot", ({ id, index, hand }) => manager.equipSlot(id, index, hand));
-  socket.on("bot:holdSlot", ({ id, index }) => manager.equipSlot(id, index, "main")); // compatibility
+  socket.on("bot:holdSlot", ({ id, index }) => manager.equipSlot(id, index, "main"));
 
   socket.on("bot:unequipArmor", ({ id, part }) => manager.unequipArmor?.(id, part));
 
@@ -68,7 +68,6 @@ io.on("connection", socket => {
   );
 
   socket.on("bot:setTweaks", ({ id, toggles }) => manager.setTweaks(id, toggles));
-  socket.on("bot:autoSleep", ({ id, on }) => manager.setTweaks(id, { autoSleep: !!on }));
 });
 
 http.listen(PORT, () => {
