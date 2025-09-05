@@ -1,91 +1,92 @@
-// extras.js
+// src/extras.js
 import pkg from "mineflayer-pathfinder";
 const { goals } = pkg;
+import { Vec3 } from "vec3";
 
-/**
- * Toggle sneak on/off for the bot
- */
+// --- Sneak toggle ---
 export function toggleSneak(entry, io) {
-  if (!entry.bot) return;
-  entry._sneakState = !entry._sneakState;
-  entry.bot.setControlState("sneak", entry._sneakState);
-
-  io.emit("bot:log", {
-    id: entry.id,
-    line: `Sneak ${entry._sneakState ? "ON" : "OFF"}`
-  });
+  if (!entry?.bot) return;
+  try {
+    entry._sneakState = !entry._sneakState;
+    entry.bot.setControlState("sneak", entry._sneakState);
+    io.emit("bot:log", {
+      id: entry.id,
+      line: `Sneak ${entry._sneakState ? "ON" : "OFF"}`
+    });
+  } catch (err) {
+    io.emit("bot:log", { id: entry.id, line: `toggleSneak error: ${err.message}` });
+  }
 }
 
-/**
- * Enable auto sleep with debug logging
- */
+// --- Auto sleep handling ---
 export function ensureAutoSleep(entry, io) {
-  if (!entry.bot) return;
+  if (!entry?.bot) return;
   if (entry._sleepTimer) return;
 
   const b = entry.bot;
-
   entry._sleepTimer = setInterval(async () => {
     try {
-      // Check time
-      const time = b.time?.timeOfDay || 0;
-      const isNight = time > 12541 && time < 23458;
-      if (!isNight) {
-        io.emit("bot:log", { id: entry.id, line: "Auto-sleep: not night time" });
-        return;
-      }
+      if (!b || !b.entity) return;
 
-      if (b.isSleeping) {
-        io.emit("bot:log", { id: entry.id, line: "Auto-sleep: already sleeping" });
-        return;
-      }
+      const time = b.time?.timeOfDay ?? 0;
+      const isNight = time > 12541 && time < 23458;
+      if (!isNight) return;
 
       io.emit("bot:log", { id: entry.id, line: "Auto-sleep: searching for beds..." });
 
-      // Find nearby beds
-      const bed = b.findBlock({
-        matching: block => block.name.includes("bed"),
-        maxDistance: 10
+      const beds = b.findBlocks({
+        matching: (block) => block.name.includes("bed"),
+        maxDistance: 10,
+        count: 5
       });
 
-      if (!bed) {
-        io.emit("bot:log", { id: entry.id, line: "Auto-sleep: no bed found nearby" });
-        return;
-      }
-
-      io.emit("bot:log", {
-        id: entry.id,
-        line: `Auto-sleep: found bed at (${bed.position.x}, ${bed.position.y}, ${bed.position.z})`
-      });
+      if (!beds.length) return;
+      const bedPos = beds[0];
+      io.emit("bot:log", { id: entry.id, line: `Auto-sleep: found bed at (${bedPos.x}, ${bedPos.y}, ${bedPos.z})` });
 
       // Pathfind to bed
-      try {
-        await b.pathfinder.goto(
-          new goals.GoalGetToBlock(bed.position.x, bed.position.y, bed.position.z)
-        );
-        io.emit("bot:log", { id: entry.id, line: "Auto-sleep: reached bed position" });
-      } catch (err) {
-        io.emit("bot:log", { id: entry.id, line: `Auto-sleep: pathfinding failed - ${err.message}` });
-        return;
-      }
+      const goal = new goals.GoalGetToBlock(bedPos.x, bedPos.y, bedPos.z);
+      await b.pathfinder.goto(goal);
+      io.emit("bot:log", { id: entry.id, line: "Auto-sleep: reached bed position" });
 
-      // Try to sleep
-      const bedBlock = b.blockAt(bed.position);
-      if (!bedBlock) {
-        io.emit("bot:log", { id: entry.id, line: "Auto-sleep: bed block missing at position" });
-        return;
-      }
+      const bedBlock = b.blockAt(new Vec3(bedPos.x, bedPos.y, bedPos.z));
+      if (!bedBlock) return;
 
+      // Try proper sleep first
       try {
         await b.sleep(bedBlock);
         io.emit("bot:log", { id: entry.id, line: "Auto-sleep: bot is now sleeping" });
       } catch (err) {
-        io.emit("bot:log", { id: entry.id, line: `Auto-sleep: failed to sleep - ${err.message}` });
+        io.emit("bot:log", { id: entry.id, line: `Auto-sleep: failed normal sleep - ${err.message}` });
+
+        // Log nearby mobs that might block sleep
+        try {
+          const mobs = Object.values(b.entities)
+            .filter(e => e.type === "mob" && e.position.distanceTo(b.entity.position) <= 8);
+          if (mobs.length) {
+            for (const m of mobs) {
+              io.emit("bot:log", {
+                id: entry.id,
+                line: `Nearby mob: ${m.name || m.type} at ${m.position.distanceTo(b.entity.position).toFixed(1)} blocks`
+              });
+            }
+          } else {
+            io.emit("bot:log", { id: entry.id, line: "No mobs detected nearby, strange!" });
+          }
+        } catch {}
+
+        // Fallback: right click bed
+        try {
+          await b.activateBlock(bedBlock);
+          io.emit("bot:log", { id: entry.id, line: "Auto-sleep: tried fallback activateBlock()" });
+        } catch (fallbackErr) {
+          io.emit("bot:log", { id: entry.id, line: `Auto-sleep: fallback failed - ${fallbackErr.message}` });
+        }
       }
     } catch (err) {
       io.emit("bot:log", { id: entry.id, line: `Auto-sleep error: ${err.message}` });
     }
-  }, 5000);
+  }, 10000); // check every 10s
 }
 
 export function clearAutoSleep(entry) {
