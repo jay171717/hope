@@ -3,36 +3,32 @@ import pkg from "mineflayer-pathfinder";
 const { goals } = pkg;
 import { Vec3 } from "vec3";
 
-// --- Sneak toggle ---
+// sneak
 export function toggleSneak(entry, io) {
-  if (!entry?.bot) return;
+  if (!entry?.bot) return false;
+
+  // track sneaking state per entry
+  entry.isSneaking = !entry.isSneaking;
+
   try {
-    entry._sneakState = !entry._sneakState;
+    entry.bot.setControlState("sneak", entry.isSneaking);
 
-    if (entry._sneakState) {
-      // Start interval to hold sneak ON
-      if (!entry._sneakTimer) {
-        entry._sneakTimer = setInterval(() => {
-          try { entry.bot.setControlState("sneak", true); } catch {}
-        }, 200); // refresh every 200ms
-      }
-    } else {
-      // Stop sneaking
-      if (entry._sneakTimer) {
-        clearInterval(entry._sneakTimer);
-        entry._sneakTimer = null;
-      }
-      entry.bot.setControlState("sneak", false);
-    }
-
+    const status = entry.isSneaking ? "activated" : "deactivated";
     io.emit("bot:log", {
       id: entry.id,
-      line: `Sneak ${entry._sneakState ? "ON" : "OFF"}`
+      line: `Sneak mode ${status}`
     });
+
+    return entry.isSneaking;
   } catch (err) {
-    io.emit("bot:log", { id: entry.id, line: `toggleSneak error: ${err.message}` });
+    io.emit("bot:log", {
+      id: entry.id,
+      line: `toggleSneak error: ${err.message}`
+    });
+    return false;
   }
 }
+
 
 
 // --- Auto sleep handling ---
