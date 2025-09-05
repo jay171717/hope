@@ -8,7 +8,23 @@ export function toggleSneak(entry, io) {
   if (!entry?.bot) return;
   try {
     entry._sneakState = !entry._sneakState;
-    entry.bot.setControlState("sneak", entry._sneakState);
+
+    if (entry._sneakState) {
+      // Start interval to hold sneak ON
+      if (!entry._sneakTimer) {
+        entry._sneakTimer = setInterval(() => {
+          try { entry.bot.setControlState("sneak", true); } catch {}
+        }, 200); // refresh every 200ms
+      }
+    } else {
+      // Stop sneaking
+      if (entry._sneakTimer) {
+        clearInterval(entry._sneakTimer);
+        entry._sneakTimer = null;
+      }
+      entry.bot.setControlState("sneak", false);
+    }
+
     io.emit("bot:log", {
       id: entry.id,
       line: `Sneak ${entry._sneakState ? "ON" : "OFF"}`
@@ -17,6 +33,7 @@ export function toggleSneak(entry, io) {
     io.emit("bot:log", { id: entry.id, line: `toggleSneak error: ${err.message}` });
   }
 }
+
 
 // --- Auto sleep handling ---
 export function ensureAutoSleep(entry, io) {
