@@ -13,93 +13,49 @@ import { Vec3 } from "vec3";
  */
 
 // ---------- Sneak ----------
-function _writeEntityActionIfPossible(bot, action) {
-  // action: 1 = start sneaking, 2 = stop sneaking
-  try {
-    const id = bot?.entity?.id;
-    if (!id) return;
-    if (bot._client && typeof bot._client.write === "function") {
-      try { bot._client.write("entity_action", { entityId: id, action }); } catch {}
-    }
-  } catch (e) {}
-}
+// extras.js (replace toggleSneak & clearSneak)
 
 export function toggleSneak(entry, io) {
-  if (!entry || !entry.bot) return false;
+  if (!entry?.bot) return false;
   const bot = entry.bot;
 
-  // very short debounce to avoid accidental double toggles from UI clicks
-  const now = Date.now();
-  if (entry._lastSneakToggle && now - entry._lastSneakToggle < 80) {
-    entry._lastSneakToggle = now;
-    // allow toggle to continue anyway (don't return early) — but update timestamp
-  }
-  entry._lastSneakToggle = now;
+  entry._sneakState = !entry._sneakState;
 
-  try {
-    // flip state
-    entry._sneakState = !entry._sneakState;
+  if (entry._sneakState) {
+    // enable sneak
+    if (entry._sneakInterval) clearInterval(entry._sneakInterval);
+    bot.setControlState("sneak", true);
+    entry._sneakInterval = setInterval(() => {
+      bot.setControlState("sneak", true);
+    }, 1000);
 
-    if (entry._sneakState) {
-      // start enforcing sneak repeatedly
-      // clear any previous "stop retry" timers
-      if (entry._sneakStopRetryTimers) {
-        entry._sneakStopRetryTimers.forEach(t => clearTimeout(t));
-        entry._sneakStopRetryTimers = null;
-      }
-      // ensure no duplicate interval
-      if (entry._sneakInterval) clearInterval(entry._sneakInterval);
-      // enforce every 200ms (keeps state despite interference)
-      entry._sneakInterval = setInterval(() => {
-        try { bot.setControlState("sneak", true); } catch (e) {}
-        // best-effort: send entity_action start (some servers respond better to packet)
-        _writeEntityActionIfPossible(bot, 1);
-      }, 200);
-      // immediate enforcement
-      try { bot.setControlState("sneak", true); } catch (e) {}
-      _writeEntityActionIfPossible(bot, 1);
-
-    } else {
-      // turning off: clear enforce interval and attempt multiple stop packets
-      if (entry._sneakInterval) { clearInterval(entry._sneakInterval); entry._sneakInterval = null; }
-      // also clear any legacy timers names (defensive)
-      if (entry._sneakTimer) { clearInterval(entry._sneakTimer); entry._sneakTimer = null; }
-
-      try { bot.setControlState("sneak", false); } catch (e) {}
-      // send stop packet multiple times to be robust
-      const timers = [];
-      const sendStop = () => { try { _writeEntityActionIfPossible(bot, 2); } catch {} };
-      sendStop();
-      timers.push(setTimeout(sendStop, 150));
-      timers.push(setTimeout(sendStop, 400));
-      // keep references so clearSneak can cancel them (if needed)
-      entry._sneakStopRetryTimers = timers;
+    io.emit("bot:log", { id: entry.id, line: "Sneak mode activated" });
+  } else {
+    // disable sneak
+    if (entry._sneakInterval) {
+      clearInterval(entry._sneakInterval);
+      entry._sneakInterval = null;
     }
+    bot.setControlState("sneak", false);
 
-    io.emit("bot:log", { id: entry.id, line: `Sneak mode ${entry._sneakState ? "activated" : "deactivated"}` });
-    return !!entry._sneakState;
-  } catch (err) {
-    io.emit("bot:log", { id: entry.id, line: `toggleSneak error: ${err?.message || err}` });
-    return false;
+    io.emit("bot:log", { id: entry.id, line: "Sneak mode deactivated" });
   }
+
+  return entry._sneakState;
 }
 
 export function clearSneak(entry) {
-  try {
-    if (!entry) return;
-    if (entry._sneakInterval) { clearInterval(entry._sneakInterval); entry._sneakInterval = null; }
-    if (entry._sneakTimer) { clearInterval(entry._sneakTimer); entry._sneakTimer = null; }
-    if (entry._sneakStopRetryTimers && Array.isArray(entry._sneakStopRetryTimers)) {
-      entry._sneakStopRetryTimers.forEach(t => clearTimeout(t));
-      entry._sneakStopRetryTimers = null;
-    }
-    if (entry.bot) {
-      try { entry.bot.setControlState("sneak", false); } catch (e) {}
-      try { _writeEntityActionIfPossible(entry.bot, 2); } catch (e) {}
-    }
-    entry._sneakState = false;
-  } catch (e) {}
+  if (!entry) return;
+  if (entry._sneakInterval) {
+    clearInterval(entry._sneakInterval);
+    entry._sneakInterval = null;
+  }
+  if (entry.bot) {
+    entry.bot.setControlState("sneak", false);
+  }
+  entry._sneakState = false;
 }
+
 
 // ---------- Auto-sleep (kept & slightly hardened) ----------
 export function ensureAutoSleep(entry, io) {
