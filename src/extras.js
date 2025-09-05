@@ -1,58 +1,60 @@
 import pathfinderPkg from "mineflayer-pathfinder";
 const { goals } = pathfinderPkg;
+import { Vec3 } from "vec3";
 
-export function setupSneak(bot, io, id, entry) {
-  entry._sneakState = false;
-
-  function toggleSneak() {
-    entry._sneakState = !entry._sneakState;
-    try {
-      bot.setControlState("sneak", entry._sneakState);
-      io.emit("bot:log", { id, line: `Sneak ${entry._sneakState ? "ON" : "OFF"}` });
-    } catch (err) {
-      io.emit("bot:log", { id, line: `Sneak toggle error: ${err.message || err}` });
-    }
+/**
+ * Sneak toggle for a bot entry
+ */
+export function toggleSneak(entry, io) {
+  if (!entry?.bot) return;
+  entry._sneakState = !entry._sneakState;
+  try {
+    entry.bot.setControlState("sneak", entry._sneakState);
+    io.emit("bot:log", { id: entry.id, line: `Sneak ${entry._sneakState ? "ON" : "OFF"}` });
+  } catch (err) {
+    io.emit("bot:log", { id: entry.id, line: `Sneak toggle error: ${err.message || err}` });
   }
-
-  return { toggleSneak };
 }
 
-export function setupAutoSleep(bot, io, id, entry) {
-  let interval = null;
+/**
+ * Auto-sleep helpers
+ */
+export function ensureAutoSleep(entry, io) {
+  if (!entry?.bot) return;
+  if (entry._sleepTimer) return;
 
-  function start() {
-    if (interval) return;
-    interval = setInterval(async () => {
+  const b = entry.bot;
+  entry._sleepTimer = setInterval(async () => {
+    try {
+      const time = b.time?.timeOfDay || 0;
+      const isNight = time > 12541 && time < 23458;
+      if (!isNight || b.isSleeping) return;
+
+      const bed = b.findBlock({
+        matching: block => block.name.includes("bed"),
+        maxDistance: 10
+      });
+      if (!bed) return;
+
+      io.emit("bot:log", { id: entry.id, line: `Auto-sleep: found bed at ${bed.position}` });
+
       try {
-        const time = bot.time?.timeOfDay || 0;
-        const isNight = time > 12541 && time < 23458;
-        if (!isNight || bot.isSleeping) return;
-
-        const bedPos = bot.findBlock({
-          matching: block => block.name.includes("bed"),
-          maxDistance: 10,
-        })?.position;
-
-        if (bedPos) {
-          io.emit("bot:log", { id, line: `Found bed at ${bedPos}` });
-          try {
-            await bot.pathfinder.goto(new goals.GoalBlock(bedPos.x, bedPos.y, bedPos.z));
-            const bedBlock = bot.blockAt(bedPos);
-            if (bedBlock) await bot.sleep(bedBlock);
-          } catch (err) {
-            io.emit("bot:log", { id, line: `Auto-sleep failed: ${err.message || err}` });
-          }
+        await b.pathfinder.goto(new goals.GoalGetToBlock(bed.position.x, bed.position.y, bed.position.z));
+        const bedBlock = b.blockAt(bed.position);
+        if (bedBlock) {
+          await b.sleep(bedBlock);
+          io.emit("bot:log", { id: entry.id, line: "Auto-sleep: bot is now sleeping" });
         }
-      } catch {}
-    }, 5000);
-  }
+      } catch (err) {
+        io.emit("bot:log", { id: entry.id, line: `Auto-sleep error: ${err.message}` });
+      }
+    } catch {}
+  }, 5000);
+}
 
-  function stop() {
-    if (interval) {
-      clearInterval(interval);
-      interval = null;
-    }
+export function clearAutoSleep(entry) {
+  if (entry._sleepTimer) {
+    clearInterval(entry._sleepTimer);
+    entry._sleepTimer = null;
   }
-
-  return { start, stop };
 }
