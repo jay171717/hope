@@ -1,56 +1,58 @@
-import { Vec3 } from "vec3";
-import { goals } from "mineflayer-pathfinder";
+import pathfinderPkg from "mineflayer-pathfinder";
+const { goals } = pathfinderPkg;
 
-// Sneak toggle
-export function toggleSneak(e, io) {
-  if (!e.bot) return;
-  e._sneakState = !e._sneakState;
-  try { e.bot.setControlState("sneak", e._sneakState); } catch {}
-  io.emit("bot:log", { id: e.id, line: `Sneak ${e._sneakState ? "ON" : "OFF"}` });
-}
+export function setupSneak(bot, io, id, entry) {
+  entry._sneakState = false;
 
-// Auto sleep
-export function ensureAutoSleep(e, io) {
-  if (!e.bot) { e.tweaks.autoSleep = true; return; }
-  if (e._sleepTimer) return;
-  const b = e.bot;
-
-  e._sleepTimer = setInterval(async () => {
+  function toggleSneak() {
+    entry._sneakState = !entry._sneakState;
     try {
-      if (!b) return;
-      if (!/overworld/i.test(b.game?.dimension || "")) return;
+      bot.setControlState("sneak", entry._sneakState);
+      io.emit("bot:log", { id, line: `Sneak ${entry._sneakState ? "ON" : "OFF"}` });
+    } catch (err) {
+      io.emit("bot:log", { id, line: `Sneak toggle error: ${err.message || err}` });
+    }
+  }
 
-      const time = b.time?.timeOfDay || 0;
-      const isNight = time > 12541 && time < 23458;
-      if (!isNight || b.isSleeping) return;
-
-      const beds = b.findBlocks({
-        matching: block => block?.name?.includes("bed"),
-        maxDistance: 10,
-        count: 5
-      });
-
-      if (!beds.length) return;
-      const bedPos = beds[0];
-
-      io.emit("bot:log", { id: e.id, line: `AutoSleep: found bed at ${bedPos}` });
-
-      const goal = new goals.GoalGetToBlock(bedPos.x, bedPos.y, bedPos.z);
-      await b.pathfinder.goto(goal).catch(() => {});
-
-      const bedBlock = b.blockAt(bedPos);
-      if (bedBlock) {
-        try {
-          await b.sleep(bedBlock);
-          io.emit("bot:log", { id: e.id, line: "Bot is now sleeping." });
-        } catch (err) {
-          io.emit("bot:log", { id: e.id, line: `Sleep failed: ${err?.message || err}` });
-        }
-      }
-    } catch {}
-  }, 5000);
+  return { toggleSneak };
 }
 
-export function clearAutoSleep(e) {
-  if (e._sleepTimer) { clearInterval(e._sleepTimer); e._sleepTimer = null; }
+export function setupAutoSleep(bot, io, id, entry) {
+  let interval = null;
+
+  function start() {
+    if (interval) return;
+    interval = setInterval(async () => {
+      try {
+        const time = bot.time?.timeOfDay || 0;
+        const isNight = time > 12541 && time < 23458;
+        if (!isNight || bot.isSleeping) return;
+
+        const bedPos = bot.findBlock({
+          matching: block => block.name.includes("bed"),
+          maxDistance: 10,
+        })?.position;
+
+        if (bedPos) {
+          io.emit("bot:log", { id, line: `Found bed at ${bedPos}` });
+          try {
+            await bot.pathfinder.goto(new goals.GoalBlock(bedPos.x, bedPos.y, bedPos.z));
+            const bedBlock = bot.blockAt(bedPos);
+            if (bedBlock) await bot.sleep(bedBlock);
+          } catch (err) {
+            io.emit("bot:log", { id, line: `Auto-sleep failed: ${err.message || err}` });
+          }
+        }
+      } catch {}
+    }, 5000);
+  }
+
+  function stop() {
+    if (interval) {
+      clearInterval(interval);
+      interval = null;
+    }
+  }
+
+  return { start, stop };
 }
