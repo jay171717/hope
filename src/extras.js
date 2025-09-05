@@ -13,7 +13,7 @@ import { Vec3 } from "vec3";
  */
 
 // ---------- Sneak ----------
-// extras.js (replace toggleSneak & clearSneak)
+// extras.js
 
 export function toggleSneak(entry, io) {
   if (!entry?.bot) return false;
@@ -22,21 +22,31 @@ export function toggleSneak(entry, io) {
   entry._sneakState = !entry._sneakState;
 
   if (entry._sneakState) {
-    // enable sneak
-    if (entry._sneakInterval) clearInterval(entry._sneakInterval);
+    // start sneaking
     bot.setControlState("sneak", true);
-    entry._sneakInterval = setInterval(() => {
-      bot.setControlState("sneak", true);
-    }, 1000);
+
+    // send raw packet to be 100% sure
+    try {
+      bot._client.write("entity_action", {
+        entityId: bot.entity.id,
+        actionId: 0, // start sneaking
+        jumpBoost: 0
+      });
+    } catch {}
 
     io.emit("bot:log", { id: entry.id, line: "Sneak mode activated" });
   } else {
-    // disable sneak
-    if (entry._sneakInterval) {
-      clearInterval(entry._sneakInterval);
-      entry._sneakInterval = null;
-    }
+    // stop sneaking
     bot.setControlState("sneak", false);
+
+    // send raw packet to stop sneaking
+    try {
+      bot._client.write("entity_action", {
+        entityId: bot.entity.id,
+        actionId: 2, // stop sneaking
+        jumpBoost: 0
+      });
+    } catch {}
 
     io.emit("bot:log", { id: entry.id, line: "Sneak mode deactivated" });
   }
@@ -46,12 +56,15 @@ export function toggleSneak(entry, io) {
 
 export function clearSneak(entry) {
   if (!entry) return;
-  if (entry._sneakInterval) {
-    clearInterval(entry._sneakInterval);
-    entry._sneakInterval = null;
-  }
   if (entry.bot) {
     entry.bot.setControlState("sneak", false);
+    try {
+      entry.bot._client.write("entity_action", {
+        entityId: entry.bot.entity.id,
+        actionId: 2, // stop sneaking
+        jumpBoost: 0
+      });
+    } catch {}
   }
   entry._sneakState = false;
 }
