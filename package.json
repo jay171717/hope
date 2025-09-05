@@ -13,7 +13,7 @@
     "mineflayer": "^4.25.0",
     "mineflayer-pathfinder": "^2.4.5",
     "minecraft-data": "^3.97.0",
-    "minecraft-server-util": "^5.11.1",
+    "minecraft-server-util": "^5.4.4",
     "socket.io": "^4.7.5",
     "vec3": "^0.1.10"
   }
