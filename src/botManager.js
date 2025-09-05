@@ -1,10 +1,11 @@
+// src/botManager.js
 import mineflayer from "mineflayer";
 import pathfinderPkg from "mineflayer-pathfinder";
 const { pathfinder, goals, Movements } = pathfinderPkg;
 import mcdataFactory from "minecraft-data";
 import { Vec3 } from "vec3";
 import { ActionController } from "./actions.js";
-import { toggleSneak, ensureAutoSleep, clearAutoSleep } from "./extras.js";
+import { toggleSneak, ensureAutoSleep, clearAutoSleep, clearSneak } from "./extras.js";
 
 export class BotManager {
   constructor(io, serverHost, serverPort, fixedVersion, headBase) {
@@ -66,7 +67,8 @@ export class BotManager {
       _followTimer: null,
       _sleepTimer: null,
       _respListener: null,
-      _sneakState: false
+      _sneakState: false,
+      _sneakInterval: null
     };
     this.bots.set(useId, e);
     this._spawn(e);
@@ -145,10 +147,13 @@ export class BotManager {
     bot.on("error", err => this.io.emit("bot:log", { id: e.id, line: `Error: ${err?.message || err}` }));
     bot.on("messagestr", (msg) => this.io.emit("bot:chat", { id: e.id, line: msg }));
 
+    // death => optional respawn (only when enabled)
     bot.on("death", () => {
       this.io.emit("bot:log", { id: e.id, line: "Bot died" });
       if (e.tweaks.autoRespawn) {
-        setTimeout(() => { try { bot.respawn(); } catch {} }, 600);
+        setTimeout(() => {
+          try { bot.respawn(); } catch (err) {}
+        }, 600);
       }
     });
   }
@@ -233,7 +238,6 @@ export class BotManager {
   }
 
   // ---------- UI commands ----------
-
   chat(id, text) {
     const e = this.bots.get(id); if (!e?.bot) return;
     try { e.bot.chat(text); } catch {}
@@ -276,13 +280,17 @@ export class BotManager {
     const e = this.bots.get(id); if (!e?.bot) return;
     try {
       e.bot.setControlState("jump", true);
-      setTimeout(()=>{ try { e.bot.setControlState("jump", false); } catch {} }, 200);
+      setTimeout(()=>{ try { e.bot.setControlState("jump", false); } catch {} }, 250);
     } catch {}
   }
 
   toggleSneak(id) {
-    const e = this.bots.get(id); if (!e?.bot) return;
-    toggleSneak(e, this.io);
+    const e = this.bots.get(id); if (!e) return;
+    try {
+      toggleSneak(e, this.io);
+    } catch (err) {
+      this.io.emit("bot:log", { id, line: `toggleSneak error: ${err?.message || err}` });
+    }
   }
 
   stopPath(id) {
@@ -368,7 +376,7 @@ export class BotManager {
     this.broadcastList();
   }
 
-  // Auto-eat
+  // --- Auto eat ---
   _ensureAutoEat(e) {
     if (!e.bot) { e.tweaks.autoEat = true; return; }
     if (e._eatTimer) return;
@@ -397,6 +405,7 @@ export class BotManager {
   }
   _clearAutoEat(e) { if (e._eatTimer) { clearInterval(e._eatTimer); e._eatTimer = null; } }
 
+  // --- Follow ---
   _ensureFollow(e) {
     if (!e.bot) return;
     if (e._followTimer) return;
@@ -422,6 +431,7 @@ export class BotManager {
     if (e._eatTimer) { clearInterval(e._eatTimer); e._eatTimer = null; }
     if (e._followTimer) { clearInterval(e._followTimer); e._followTimer = null; }
     clearAutoSleep(e);
+    clearSneak(e);
     if (e._respListener && e.bot) { try { e.bot.removeListener("death", e._respListener); } catch {} }
     e._respListener = null;
   }
