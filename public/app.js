@@ -55,6 +55,7 @@ socket.on("bot:list", list => {
         $("#twAutoEat").checked = !!b.tweaks.autoEat;
         $("#twAutoMinePlace").checked = !!b.tweaks.autoMinePlace;
         $("#twAutoSleep").checked = !!b.tweaks.autoSleep;
+        $("#twAntiAfk").checked = !!b.tweaks.antiAfk;
         $("#twFollowToggle").checked = !!b.tweaks.followPlayer;
         $("#twFollowPlayer").value = b.tweaks.followPlayer || "";
         $("#twFollowPlayer").disabled = !$("#twFollowToggle").checked;
@@ -99,7 +100,6 @@ socket.on("bot:telemetry", ({ id, status, inventory }) => {
   $("#stFx").textContent = (status.effects || []).map(e => `${e.type}(${e.amp})`).join(", ") || "—";
   $("#stLooking").textContent = status.looking?.block ? `${status.looking.block.name} @ ${fmtPos(status.looking.block.pos)}` : (status.looking?.entity || "—");
 
-  // inventory grid
   const grid = $("#invGrid"); grid.innerHTML = "";
   (inventory.slots || []).forEach((it, i) => {
     const d = document.createElement("div");
@@ -114,15 +114,12 @@ socket.on("bot:telemetry", ({ id, status, inventory }) => {
     grid.appendChild(d);
   });
 
-  // armor slots
   $$(".equip-slot").forEach(es => {
     const k = es.dataset.armor;
     const it = (inventory.armor || {})[k];
     es.textContent = it ? fmtItem(it) : k.toUpperCase();
     es.onclick = () => socket.emit("bot:unequipArmor", { id: currentBotId, part: k });
   });
-
-  // hands
   $("#mainHand").textContent = fmtItem(inventory.mainHand);
   $("#offHand").textContent = fmtItem(inventory.offHand);
 });
@@ -178,7 +175,6 @@ $$(".wasd button").forEach(btn => {
   btn.onmouseleave = btn.onmouseup;
 });
 
-// movement stop, jump, sneak
 $("#mvStop").onclick = () => {
   if (!currentBotId) return;
   socket.emit("bot:stopPath", currentBotId);
@@ -231,18 +227,12 @@ function sendTweaks() {
     autoEat: !!$("#twAutoEat").checked,
     autoMinePlace: !!$("#twAutoMinePlace").checked,
     autoSleep: !!$("#twAutoSleep").checked,
+    antiAfk: !!$("#twAntiAfk").checked,
     followPlayer: $("#twFollowToggle").checked ? ($("#twFollowPlayer").value.trim() || null) : null
   };
   socket.emit("bot:setTweaks", { id: currentBotId, toggles });
 }
-["#twAutoReconnect","#twAutoRespawn","#twAutoSprint","#twAutoEat","#twAutoMinePlace","#twAutoSleep","#twFollowPlayer"].forEach(sel => {
+["#twAutoReconnect","#twAutoRespawn","#twAutoSprint","#twAutoEat",
+ "#twAutoMinePlace","#twAutoSleep","#twAntiAfk","#twFollowPlayer"].forEach(sel => {
   const el = $(sel); if (el) el.onchange = sendTweaks;
 });
-
-// Footer injection
-const footer = document.createElement("footer");
-footer.innerHTML = `
-  Made for Minecraft Bot Management<br/>
-  Created by <b>Jay1717</b> • Powered by Render • 24/7 by UptimeRobot
-`;
-document.body.appendChild(footer);
