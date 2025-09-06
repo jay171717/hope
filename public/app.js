@@ -158,7 +158,7 @@ $("#mvMode").onchange = e => mvMode = e.target.value;
 let contState = { W:false, A:false, S:false, D:false };
 
 $$(".wasd button").forEach(btn => {
-  btn.onmousedown = () => {
+  const start = () => {
     if (!currentBotId) return;
     const dir = btn.dataset.mv;
     if (mvMode === "press") {
@@ -168,11 +168,15 @@ $$(".wasd button").forEach(btn => {
       socket.emit("bot:moveContinuous", { id: currentBotId, dir, on: contState[dir] });
     }
   };
-  btn.onmouseup = () => {
+  const stop = () => {
     if (!currentBotId) return;
     if (mvMode === "press") socket.emit("bot:moveContinuous", { id: currentBotId, dir: btn.dataset.mv, on: false });
   };
-  btn.onmouseleave = btn.onmouseup;
+  btn.onmousedown = start;
+  btn.ontouchstart = start;
+  btn.onmouseup = stop;
+  btn.ontouchend = stop;
+  btn.onmouseleave = stop;
 });
 
 $("#mvStop").onclick = () => {
