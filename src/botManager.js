@@ -6,6 +6,7 @@ import mcdataFactory from "minecraft-data";
 import { Vec3 } from "vec3";
 import { ActionController } from "./actions.js";
 import { toggleSneak, ensureAutoSleep, clearAutoSleep, clearSneak } from "./extras.js";
+import { startAntiAfk, stopAntiAfk } from "./antiAfk.js";
 
 export class BotManager {
   constructor(io, serverHost, serverPort, fixedVersion, headBase) {
@@ -58,7 +59,8 @@ export class BotManager {
         autoEat: false,
         followPlayer: null,
         autoMinePlace: false,
-        autoSleep: false
+        autoSleep: false,
+        antiAfk: false
       },
       createdAt: Date.now(),
       lastSeen: null,
@@ -68,7 +70,8 @@ export class BotManager {
       _sleepTimer: null,
       _respListener: null,
       _sneakState: false,
-      _sneakInterval: null
+      _sneakInterval: null,
+      _antiAfkTimer: null
     };
     this.bots.set(useId, e);
     this._spawn(e);
@@ -147,12 +150,11 @@ export class BotManager {
     bot.on("error", err => this.io.emit("bot:log", { id: e.id, line: `Error: ${err?.message || err}` }));
     bot.on("messagestr", (msg) => this.io.emit("bot:chat", { id: e.id, line: msg }));
 
-    // death => optional respawn (only when enabled)
     bot.on("death", () => {
       this.io.emit("bot:log", { id: e.id, line: "Bot died" });
       if (e.tweaks.autoRespawn) {
         setTimeout(() => {
-          try { bot.respawn(); } catch (err) {}
+          try { bot.respawn(); } catch {}
         }, 600);
       }
     });
@@ -168,6 +170,7 @@ export class BotManager {
     if (e.tweaks.autoEat) this._ensureAutoEat(e);
     if (e.tweaks.followPlayer) this._ensureFollow(e);
     if (e.tweaks.autoSleep) ensureAutoSleep(e, this.io);
+    if (e.tweaks.antiAfk) startAntiAfk(e, this.io);
   }
 
   _wireTelemetry(e) {
@@ -371,6 +374,12 @@ export class BotManager {
       if (toggles.autoMinePlace !== undefined) {
         e.tweaks.autoMinePlace = !!toggles.autoMinePlace;
       }
+
+      if (toggles.antiAfk !== undefined) {
+        e.tweaks.antiAfk = !!toggles.antiAfk;
+        if (e.tweaks.antiAfk) startAntiAfk(e, this.io);
+        else stopAntiAfk(e);
+      }
     }
 
     this.broadcastList();
@@ -430,6 +439,7 @@ export class BotManager {
     if (e._telemetryTimer) { clearInterval(e._telemetryTimer); e._telemetryTimer = null; }
     if (e._eatTimer) { clearInterval(e._eatTimer); e._eatTimer = null; }
     if (e._followTimer) { clearInterval(e._followTimer); e._followTimer = null; }
+    stopAntiAfk(e);
     clearAutoSleep(e);
     clearSneak(e);
     if (e._respListener && e.bot) { try { e.bot.removeListener("death", e._respListener); } catch {} }
