@@ -1,142 +1,237 @@
-import { Vec3 } from "vec3";
+const socket = io();
+let currentBotId = null;
+const $ = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
 
-/**
- * Actions (no Continuous): mine, attack, place, eat, drop, jump
- * Modes: Once, Interval, Stop
- *
- * - Attack uses entityAtCursor (must be looking at entity)
- * - Place uses placeBlock if available and restores look
- * - Eat uses bot.consume() if available
- * - Drop tries to re-equip same item if possible after dropping
- * - Jump sets jump ON briefly
- */
-const DEFAULT_INTERVAL_TICKS = 10;
-const TICKS_PER_SECOND = 20;
+function fmtPos(p) { return p ? `${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}` : "—"; }
+function dur(ms) { if (!ms) return "—"; const s = Math.floor(ms/1000); const h = Math.floor(s/3600); const m = Math.floor((s%3600)/60); const sec = s%60; return `${h}h ${m}m ${sec}s`; }
+function fmtItem(it) { if (!it) return "(empty)"; let s = `${it.name} x${it.count}`; if (it.enchants?.length) s += ` ✨`; if (it.durability !== null) s += ` (Dur ${it.durability})`; return s; }
 
-export class ActionController {
-  constructor(bot) {
-    this.bot = bot;
-    this.active = new Map();
-    this.listeners = new Set();
-  }
+$("#botPanel").style.display = "none";
 
-  onUpdate(fn) { this.listeners.add(fn); }
-  emit() { for (const fn of this.listeners) fn(this.listActive()); }
+socket.on("server:status", s => {
+  $("#svOnline").textContent = s.online ? "Online" : "Offline";
+  $("#svOnline").className = "badge " + (s.online ? "on" : "off");
+  $("#svAddr").textContent = `${s.host}:${s.port}`;
+  $("#svVersion").textContent = s.version || "";
+  $("#svUptime").textContent = s.uptime || "";
+  $("#svMotd").textContent = s.motd || "";
+  const cont = $("#svPlayers"); cont.innerHTML = "";
+  (s.players.sample || []).forEach(p => {
+    const el = document.createElement("div"); el.className = "av";
+    el.innerHTML = `<img src="${p.headUrl}"/> <span>${p.name}</span>`;
+    cont.appendChild(el);
+  });
+});
 
-  listActive() {
-    const arr = [];
-    for (const [k, s] of this.active) {
-      if (s.mode === "Stop") continue;
-      arr.push({ action: k, mode: s.mode, intervalGt: s.intervalGt || null });
-    }
-    return arr;
-  }
-
-  stopAll() {
-    for (const k of [...this.active.keys()]) this.setMode(k, "Stop");
-  }
-
-  setMode(key, mode, opts = {}) {
-    const prev = this.active.get(key);
-    if (prev?.timer) clearInterval(prev.timer);
-
-    if (mode === "Stop") {
-      this.active.delete(key);
-      this.emit();
-      return;
-    }
-
-    const state = { mode, intervalGt: opts.intervalGt || DEFAULT_INTERVAL_TICKS, dropStack: !!opts.dropStack };
-    this.active.set(key, state);
-
-    if (mode === "Once") this._performOnce(key, state);
-    else if (mode === "Interval") {
-      const ms = (state.intervalGt / TICKS_PER_SECOND) * 1000;
-      state.timer = setInterval(() => this._performOnce(key, state), ms);
-    }
-
-    this.emit();
-  }
-
-  _saveLook() {
-    const b = this.bot;
-    if (!b || !b.entity) return null;
-    return { yaw: b.entity.yaw, pitch: b.entity.pitch };
-  }
-  _restoreLook(l) {
-    if (!l) return;
-    try { this.bot.look(l.yaw, l.pitch, false).catch(()=>{}); } catch {}
-  }
-
-  async _performOnce(key, state) {
-    const b = this.bot;
-    if (!b) return;
-    const prev = this._saveLook();
-    try {
-      switch (key) {
-        case "mine": {
-          const blk = (() => { try { return b.blockAtCursor(6); } catch { return null; } })();
-          if (blk) await b.dig(blk).catch(()=>{});
-          break;
-        }
-        case "attack": {
-          let target = null;
-          try { target = b.entityAtCursor ? b.entityAtCursor(6) : null; } catch {}
-          if (target) await b.attack(target).catch(()=>{});
-          break;
-        }
-        case "place": {
-          const blk = (() => { try { return b.blockAtCursor(6); } catch { return null; } })();
-          if (blk && b.heldItem) {
-            try {
-              if (typeof b.placeBlock === "function") {
-                await b.placeBlock(blk, new Vec3(0, 1, 0)).catch(()=>{});
-              } else {
-                b.activateItem(false);
-                setTimeout(()=>{ try { b.deactivateItem(); } catch {} }, 150);
-              }
-            } catch {}
-          }
-          break;
-        }
-        case "eat": {
-          if (b.heldItem) {
-            if (typeof b.consume === "function") {
-              await b.consume().catch(()=>{});
-            } else {
-              b.activateItem(false);
-              await new Promise(r => setTimeout(r, 1500));
-              try { b.deactivateItem(); } catch {}
-            }
-          }
-          break;
-        }
-        case "drop": {
-          if (b.heldItem) {
-            const prevName = b.heldItem?.name;
-            try {
-              if (state.dropStack && typeof b.tossStack === "function") await b.tossStack(b.heldItem).catch(()=>{});
-              else await b.toss(b.heldItem.type, null, 1).catch(()=>{});
-            } catch {}
-            // try to re-equip same type if available to preserve mainhand
-            try {
-              const found = b.inventory.items().find(it => it.name === prevName);
-              if (found) await b.equip(found, "hand").catch(()=>{});
-            } catch {}
-          }
-          break;
-        }
-        case "jump": {
-          try {
-            b.setControlState("jump", true);
-            setTimeout(() => { try { b.setControlState("jump", false); } catch {} }, 300);
-          } catch {}
-          break;
-        }
+// BOT LIST
+socket.on("bot:list", list => {
+  const cont = $("#botList"); cont.innerHTML = "";
+  list.forEach(b => {
+    const el = document.createElement("div");
+    el.className = "bot";
+    el.innerHTML = `
+      <img src="${b.headUrl}"/>
+      <div>
+        <div class="name">${b.name}</div>
+        <div class="status">${b.online ? "Online":"Offline"}</div>
+        <div class="desc small">${b.description||""}</div>
+      </div>
+      <div class="controls">
+        <label><input type="checkbox" ${b.toggledConnected ? "checked":""} data-toggle="${b.id}"/>Connected</label>
+        <button data-remove="${b.id}">Delete</button>
+      </div>
+    `;
+    el.onclick = (ev) => {
+      if (ev.target.dataset.toggle || ev.target.dataset.remove) return;
+      currentBotId = b.id;
+      $("#botPanel").style.display = "grid";
+      $("#botDesc").value = b.description || "";
+      if (b.tweaks) {
+        $("#twAutoReconnect").checked = !!b.tweaks.autoReconnect;
+        $("#twAutoRespawn").checked = !!b.tweaks.autoRespawn;
+        $("#twAutoSprint").checked = !!b.tweaks.autoSprint;
+        $("#twAutoEat").checked = !!b.tweaks.autoEat;
+        $("#twAutoMinePlace").checked = !!b.tweaks.autoMinePlace;
+        $("#twAutoSleep").checked = !!b.tweaks.autoSleep;
+        $("#twAntiAfk").checked = !!b.tweaks.antiAfk; // ✅
+        $("#twFollowToggle").checked = !!b.tweaks.followPlayer;
+        $("#twFollowPlayer").value = b.tweaks.followPlayer || "";
+        $("#twFollowPlayer").disabled = !$("#twFollowToggle").checked;
       }
-    } catch {}
-    finally {
-      this._restoreLook(prev);
+    };
+    cont.appendChild(el);
+  });
+
+  cont.querySelectorAll("[data-remove]").forEach(btn => {
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      const id = btn.dataset.remove;
+      socket.emit("bot:remove", id);
+      if (currentBotId === id) { currentBotId = null; $("#botPanel").style.display = "none"; }
+    };
+  });
+  cont.querySelectorAll("[data-toggle]").forEach(cb => {
+    cb.onchange = (ev) => {
+      ev.stopPropagation();
+      socket.emit("bot:toggle", { id: ev.target.dataset.toggle, on: ev.target.checked });
+    };
+  });
+});
+
+// add bot
+$("#addBot").onclick = () => {
+  const name = $("#botName").value.trim();
+  if (!name) return alert("Enter bot username");
+  socket.emit("bot:add", { name });
+  $("#botName").value = "";
+};
+
+// telemetry & inventory
+socket.on("bot:telemetry", ({ id, status, inventory }) => {
+  if (id !== currentBotId) return;
+  $("#stUptime").textContent = dur(status.uptime);
+  $("#stDim").textContent = status.dim || "—";
+  $("#stPos").textContent = status.pos ? fmtPos(status.pos) : "—";
+  $("#stHH").textContent = `${status.health ?? "—"} / ${status.hunger ?? "—"}`;
+  $("#stXP").textContent = status.xp ?? "—";
+  $("#stYawPitch").textContent = `${((status.yaw||0)*(180/Math.PI)).toFixed(1)}° / ${((status.pitch||0)*(180/Math.PI)).toFixed(1)}°`;
+  $("#stFx").textContent = (status.effects || []).map(e => `${e.type}(${e.amp})`).join(", ") || "—";
+  $("#stLooking").textContent = status.looking?.block ? `${status.looking.block.name} @ ${fmtPos(status.looking.block.pos)}` : (status.looking?.entity || "—");
+
+  const grid = $("#invGrid"); grid.innerHTML = "";
+  (inventory.slots || []).forEach((it, i) => {
+    const d = document.createElement("div");
+    d.className = "slot";
+    d.title = it ? `${it.name} x${it.count}` : "(empty)";
+    d.textContent = it ? fmtItem(it) : "";
+    d.onclick = () => {
+      if (!currentBotId) return;
+      const hand = $("#selectedHand").value === "off" ? "off" : "main";
+      socket.emit("bot:equipSlot", { id: currentBotId, index: i, hand });
+    };
+    grid.appendChild(d);
+  });
+
+  $$(".equip-slot").forEach(es => {
+    const k = es.dataset.armor;
+    const it = (inventory.armor || {})[k];
+    es.textContent = it ? fmtItem(it) : k.toUpperCase();
+    es.onclick = () => socket.emit("bot:unequipArmor", { id: currentBotId, part: k });
+  });
+  $("#mainHand").textContent = fmtItem(inventory.mainHand);
+  $("#offHand").textContent = fmtItem(inventory.offHand);
+});
+
+// description persist
+$("#botDesc").onchange = () => {
+  if (!currentBotId) return;
+  socket.emit("bot:desc", { id: currentBotId, text: $("#botDesc").value });
+};
+socket.on("bot:description", ({ id, description }) => {
+  if (id === currentBotId) $("#botDesc").value = description || "";
+});
+
+// chat & respawn
+$("#chatSend").onclick = () => {
+  if (!currentBotId) return;
+  const text = $("#chatInput").value.trim();
+  if (!text) return;
+  socket.emit("bot:chat", { id: currentBotId, text });
+  $("#chatInput").value = "";
+};
+$("#btnRespawn").onclick = () => currentBotId && socket.emit("bot:respawn", currentBotId);
+
+// logs & active actions
+socket.on("bot:activeActions", ({ id, actions }) => {
+  if (id !== currentBotId) return;
+  const cont = $("#activeActions"); cont.innerHTML = "";
+  (actions || []).forEach(a => { const c = document.createElement("div"); c.className = "chip"; c.textContent = `${a.action} • ${a.mode}`; cont.appendChild(c); });
+});
+socket.on("bot:log", ({ id, line }) => { if (id !== currentBotId) return; const pre = $("#debugLog"); pre.textContent += line + "\n"; pre.scrollTop = pre.scrollHeight; });
+socket.on("bot:chat", ({ id, line }) => { if (id !== currentBotId) return; const pre = $("#debugLog"); pre.textContent += "[CHAT] " + line + "\n"; pre.scrollTop = pre.scrollHeight; });
+
+// Movement
+let mvMode = "press";
+$("#mvMode").onchange = e => mvMode = e.target.value;
+let contState = { W:false, A:false, S:false, D:false };
+
+$$(".wasd button").forEach(btn => {
+  btn.onmousedown = () => {
+    if (!currentBotId) return;
+    const dir = btn.dataset.mv;
+    if (mvMode === "press") {
+      socket.emit("bot:moveContinuous", { id: currentBotId, dir, on: true });
+    } else {
+      contState[dir] = !contState[dir];
+      socket.emit("bot:moveContinuous", { id: currentBotId, dir, on: contState[dir] });
     }
-  }
+  };
+  btn.onmouseup = () => {
+    if (!currentBotId) return;
+    if (mvMode === "press") socket.emit("bot:moveContinuous", { id: currentBotId, dir: btn.dataset.mv, on: false });
+  };
+  btn.onmouseleave = btn.onmouseup;
+});
+
+$("#mvStop").onclick = () => {
+  if (!currentBotId) return;
+  socket.emit("bot:stopPath", currentBotId);
+  ["W","A","S","D"].forEach(d => socket.emit("bot:moveContinuous", { id: currentBotId, dir: d, on: false }));
+};
+$("#mvJump").onclick = () => currentBotId && socket.emit("bot:jumpOnce", currentBotId);
+$("#mvSneak").onclick = () => currentBotId && socket.emit("bot:toggleSneak", currentBotId);
+
+// pathfinding
+$("#gotoBtn").onclick = () => {
+  if (!currentBotId) return;
+  const x = Number($("#gotoX").value), y = Number($("#gotoY").value), z = Number($("#gotoZ").value);
+  if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) socket.emit("bot:gotoXYZ", { id: currentBotId, x, y, z });
+};
+$("#stopGotoBtn").onclick = () => currentBotId && socket.emit("bot:stopPath", currentBotId);
+
+// Looking
+$$(".plus button").forEach(b => b.onclick = () => {
+  if (!currentBotId) return;
+  const step = Number($("#rotStep").value || "15");
+  const map = { up:[0,-step], down:[0,step], left:[-step,0], right:[step,0] };
+  const [dyaw, dpitch] = map[b.dataset.rot];
+  socket.emit("bot:rotateStep", { id: currentBotId, dyaw, dpitch });
+});
+$("#setAngles").onclick = () => { if (!currentBotId) return; const yaw = Number($("#yawSet").value), pitch = Number($("#pitchSet").value); if (Number.isFinite(yaw) && Number.isFinite(pitch)) socket.emit("bot:lookAngles", { id: currentBotId, yaw, pitch }); };
+$("#lookBtn").onclick = () => { if (!currentBotId) return; const x = Number($("#lookX").value), y = Number($("#lookY").value), z = Number($("#lookZ").value); if (Number.isFinite(x)&&Number.isFinite(y)&&Number.isFinite(z)) socket.emit("bot:lookAt", { id: currentBotId, x, y, z }); };
+
+// Actions
+$$(".action .apply").forEach(btn => btn.onclick = () => {
+  if (!currentBotId) return;
+  const root = btn.closest(".action");
+  const action = root.dataset.action;
+  const mode = root.querySelector(".mode").value;
+  const gt = Number(root.querySelector(".gt").value || "10");
+  const dropStack = !!root.querySelector(".dropStack")?.checked;
+  socket.emit("bot:setAction", { id: currentBotId, action, mode, intervalGt: gt, dropStack });
+});
+
+// Misc toggles
+$("#twFollowToggle").onchange = (ev) => {
+  $("#twFollowPlayer").disabled = !ev.target.checked;
+  sendTweaks();
+};
+function sendTweaks() {
+  if (!currentBotId) return;
+  const toggles = {
+    autoReconnect: !!$("#twAutoReconnect").checked,
+    autoRespawn: !!$("#twAutoRespawn").checked,
+    autoSprint: !!$("#twAutoSprint").checked,
+    autoEat: !!$("#twAutoEat").checked,
+    autoMinePlace: !!$("#twAutoMinePlace").checked,
+    autoSleep: !!$("#twAutoSleep").checked,
+    antiAfk: !!$("#twAntiAfk").checked, // ✅
+    followPlayer: $("#twFollowToggle").checked ? ($("#twFollowPlayer").value.trim() || null) : null
+  };
+  socket.emit("bot:setTweaks", { id: currentBotId, toggles });
 }
+["#twAutoReconnect","#twAutoRespawn","#twAutoSprint","#twAutoEat",
+ "#twAutoMinePlace","#twAutoSleep","#twAntiAfk","#twFollowPlayer"].forEach(sel => {
+  const el = $(sel); if (el) el.onchange = sendTweaks;
+});
