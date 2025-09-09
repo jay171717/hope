@@ -5,8 +5,8 @@ const { pathfinder, goals, Movements } = pathfinderPkg;
 import mcdataFactory from "minecraft-data";
 import { Vec3 } from "vec3";
 import { ActionController } from "./actions.js";
-import { toggleSneak, ensureAutoSleep, clearAutoSleep, clearSneak } from "./extras.js";
-import { startAntiAfk, stopAntiAfk } from "./antiAfk.js";
+import { toggleSneak, ensureAutoSleep, clearAutoSleep, clearSneak, clearAntiAfk } from "./extras.js";
+import { AntiAfk } from "./antiAfk.js";
 
 export class BotManager {
   constructor(io, serverHost, serverPort, fixedVersion, headBase) {
@@ -71,7 +71,7 @@ export class BotManager {
       _respListener: null,
       _sneakState: false,
       _sneakInterval: null,
-      _antiAfkTimer: null
+      _antiAfk: null
     };
     this.bots.set(useId, e);
     this._spawn(e);
@@ -170,7 +170,10 @@ export class BotManager {
     if (e.tweaks.autoEat) this._ensureAutoEat(e);
     if (e.tweaks.followPlayer) this._ensureFollow(e);
     if (e.tweaks.autoSleep) ensureAutoSleep(e, this.io);
-    if (e.tweaks.antiAfk) startAntiAfk(e, this.io);
+    if (e.tweaks.antiAfk) {
+      e._antiAfk = new AntiAfk(b, this.io, e.id);
+      e._antiAfk.start();
+    }
   }
 
   _wireTelemetry(e) {
@@ -376,9 +379,14 @@ export class BotManager {
       }
 
       if (toggles.antiAfk !== undefined) {
-        e.tweaks.antiAfk = !!toggles.antiAfk;
-        if (e.tweaks.antiAfk) startAntiAfk(e, this.io);
-        else stopAntiAfk(e);
+        if (toggles.antiAfk) {
+          if (!e._antiAfk) {
+            e._antiAfk = new AntiAfk(b, this.io, e.id);
+            e._antiAfk.start();
+          }
+        } else {
+          clearAntiAfk(e);
+        }
       }
     }
 
@@ -439,9 +447,9 @@ export class BotManager {
     if (e._telemetryTimer) { clearInterval(e._telemetryTimer); e._telemetryTimer = null; }
     if (e._eatTimer) { clearInterval(e._eatTimer); e._eatTimer = null; }
     if (e._followTimer) { clearInterval(e._followTimer); e._followTimer = null; }
-    stopAntiAfk(e);
     clearAutoSleep(e);
     clearSneak(e);
+    clearAntiAfk(e);
     if (e._respListener && e.bot) { try { e.bot.removeListener("death", e._respListener); } catch {} }
     e._respListener = null;
   }
