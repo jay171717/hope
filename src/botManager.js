@@ -6,6 +6,7 @@ import mcdataFactory from "minecraft-data";
 import { Vec3 } from "vec3";
 import { ActionController } from "./actions.js";
 import { toggleSneak, ensureAutoSleep, clearAutoSleep, clearSneak } from "./extras.js";
+import { startAntiAfk, stopAntiAfk } from "./antiAfk.js"; // ✅ NEW
 
 export class BotManager {
   constructor(io, serverHost, serverPort, fixedVersion, headBase) {
@@ -58,7 +59,8 @@ export class BotManager {
         autoEat: false,
         followPlayer: null,
         autoMinePlace: false,
-        autoSleep: false
+        autoSleep: false,
+        antiAfk: false // ✅ NEW default
       },
       createdAt: Date.now(),
       lastSeen: null,
@@ -69,7 +71,7 @@ export class BotManager {
       _respListener: null,
       _sneakState: false,
       _sneakInterval: null,
-      _afkTimer: null // <-- Anti AFK
+      _antiAfkInterval: null // ✅ NEW
     };
     this.bots.set(useId, e);
     this._spawn(e);
@@ -128,16 +130,12 @@ export class BotManager {
       this.broadcastList();
       if (e.tweaks.autoSprint) try { bot.setControlState("sprint", true); } catch {}
       this._applyTweaksAfterSpawn(e);
-
-      // start Anti-AFK
-      this._startAntiAfk(e);
     });
 
     bot.on("end", (reason) => {
       this.io.emit("bot:log", { id: e.id, line: `Disconnected: ${reason || "end"}` });
       e.actions?.stopAll();
       if (e._telemetryTimer) { clearInterval(e._telemetryTimer); e._telemetryTimer = null; }
-      this._stopAntiAfk(e);
       e.bot = null;
 
       if (e.tweaks.autoReconnect && e.toggledConnected) {
@@ -152,12 +150,11 @@ export class BotManager {
     bot.on("error", err => this.io.emit("bot:log", { id: e.id, line: `Error: ${err?.message || err}` }));
     bot.on("messagestr", (msg) => this.io.emit("bot:chat", { id: e.id, line: msg }));
 
-    // death => optional respawn
     bot.on("death", () => {
       this.io.emit("bot:log", { id: e.id, line: "Bot died" });
       if (e.tweaks.autoRespawn) {
         setTimeout(() => {
-          try { bot.respawn(); } catch {}
+          try { bot.respawn(); } catch (err) {}
         }, 600);
       }
     });
@@ -173,54 +170,9 @@ export class BotManager {
     if (e.tweaks.autoEat) this._ensureAutoEat(e);
     if (e.tweaks.followPlayer) this._ensureFollow(e);
     if (e.tweaks.autoSleep) ensureAutoSleep(e, this.io);
+    if (e.tweaks.antiAfk) startAntiAfk(e, this.io); // ✅ NEW
   }
 
-  // ---------- Anti AFK ----------
-  _startAntiAfk(e) {
-    this._stopAntiAfk(e);
-    if (!e.bot) return;
-
-    const actions = ["jump", "rotate", "chat"];
-    const doAction = () => {
-      if (!e.bot) return;
-      const pick = actions[Math.floor(Math.random() * actions.length)];
-      if (pick === "jump") {
-        try {
-          e.bot.setControlState("jump", true);
-          setTimeout(() => { try { e.bot.setControlState("jump", false); } catch {} }, 300);
-          this.io.emit("bot:log", { id: e.id, line: "Anti-AFK: jumped" });
-        } catch {}
-      } else if (pick === "rotate") {
-        try {
-          const yaw = e.bot.entity.yaw + (Math.random() - 0.5) * 0.5;
-          const pitch = e.bot.entity.pitch + (Math.random() - 0.5) * 0.2;
-          e.bot.look(yaw, pitch, true).catch(()=>{});
-          this.io.emit("bot:log", { id: e.id, line: "Anti-AFK: rotated view" });
-        } catch {}
-      } else if (pick === "chat") {
-        try {
-          e.bot.chat(`/msg ${e.name} beep`);
-          this.io.emit("bot:log", { id: e.id, line: "Anti-AFK: sent self /msg" });
-        } catch {}
-      }
-    };
-
-    const loop = () => {
-      doAction();
-      const next = 25000 + Math.floor(Math.random() * 10000); // 25–35s
-      e._afkTimer = setTimeout(loop, next);
-    };
-    loop();
-  }
-
-  _stopAntiAfk(e) {
-    if (e._afkTimer) {
-      clearTimeout(e._afkTimer);
-      e._afkTimer = null;
-    }
-  }
-
-  // ---------- telemetry ----------
   _wireTelemetry(e) {
     const b = e.bot;
     if (!b) return;
@@ -340,7 +292,7 @@ export class BotManager {
     try {
       toggleSneak(e, this.io);
     } catch (err) {
-      this.io.emit("bot:log", { id, line: `toggleSneak error: ${err?.message}` });
+      this.io.emit("bot:log", { id, line: `toggleSneak error: ${err?.message || err}` });
     }
   }
 
@@ -422,6 +374,12 @@ export class BotManager {
       if (toggles.autoMinePlace !== undefined) {
         e.tweaks.autoMinePlace = !!toggles.autoMinePlace;
       }
+
+      if (toggles.antiAfk !== undefined) { // ✅ NEW
+        e.tweaks.antiAfk = !!toggles.antiAfk;
+        if (e.tweaks.antiAfk) startAntiAfk(e, this.io);
+        else stopAntiAfk(e);
+      }
     }
 
     this.broadcastList();
@@ -466,25 +424,23 @@ export class BotManager {
         if (!b) return;
         const name = e.tweaks.followPlayer;
         if (!name) return;
-        const plEntry = Object.values(b.players).find(p => (p.username === name) || (p.displayName === name));
-        const ent = plEntry?.entity;
-        if (ent) b.pathfinder.setGoal(new goals.GoalFollow(ent, 2), true);
+        const plEntry = Object.values(b.players || {}).find(p => p.username === name);
+        if (plEntry && plEntry.entity) {
+          try { b.pathfinder.setGoal(new goals.GoalFollow(plEntry.entity, 1), true); } catch {}
+        }
       } catch {}
-    }, 1200);
+    }, 2000);
   }
-  _clearFollow(e) {
-    if (e._followTimer) { clearInterval(e._followTimer); e._followTimer = null; }
-    if (e.bot) try { e.bot.pathfinder.setGoal(null); } catch {}
-  }
+  _clearFollow(e) { if (e._followTimer) { clearInterval(e._followTimer); e._followTimer = null; } }
 
   _clearTimersAndListeners(e) {
-    if (e._telemetryTimer) { clearInterval(e._telemetryTimer); e._telemetryTimer = null; }
-    if (e._eatTimer) { clearInterval(e._eatTimer); e._eatTimer = null; }
-    if (e._followTimer) { clearInterval(e._followTimer); e._followTimer = null; }
-    this._stopAntiAfk(e);
-    clearAutoSleep(e);
-    clearSneak(e);
+    if (!e) return;
+    if (e._telemetryTimer) clearInterval(e._telemetryTimer);
+    if (e._eatTimer) clearInterval(e._eatTimer);
+    if (e._followTimer) clearInterval(e._followTimer);
+    if (e._sneakInterval) clearInterval(e._sneakInterval);
+    if (e._sleepTimer) clearInterval(e._sleepTimer);
     if (e._respListener && e.bot) { try { e.bot.removeListener("death", e._respListener); } catch {} }
-    e._respListener = null;
+    stopAntiAfk(e); // ✅ NEW
   }
 }
